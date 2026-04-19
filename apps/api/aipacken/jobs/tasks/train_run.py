@@ -85,9 +85,14 @@ async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             ),
             "MLFLOW_TRACKING_URI": settings.mlflow_tracking_uri,
             "MLFLOW_RUN_ID": mlflow_run_id or "",
+            # MLflow's S3 artifact backend needs the endpoint URL under its
+            # own env name (MLFLOW_S3_ENDPOINT_URL). Without it boto3 defaults
+            # to real AWS S3 and our MinIO creds get rejected.
+            "MLFLOW_S3_ENDPOINT_URL": settings.s3_endpoint_url,
             "S3_ENDPOINT_URL": settings.s3_endpoint_url,
             "AWS_ACCESS_KEY_ID": settings.minio_root_user,
             "AWS_SECRET_ACCESS_KEY": settings.minio_root_password,
+            "AWS_DEFAULT_REGION": settings.s3_region,
             "RUN_ID": run.id,
         }
 
