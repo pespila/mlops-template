@@ -17,6 +17,9 @@ const DatasetDetail = lazy(() =>
 const ExperimentsList = lazy(() =>
   import("@/pages/experiments/ExperimentsList").then((m) => ({ default: m.ExperimentsList })),
 );
+const ExperimentDetail = lazy(() =>
+  import("@/pages/experiments/ExperimentDetail").then((m) => ({ default: m.ExperimentDetail })),
+);
 const NewRunWizard = lazy(() =>
   import("@/pages/experiments/NewRunWizard").then((m) => ({ default: m.NewRunWizard })),
 );
@@ -58,6 +61,7 @@ export const router = createBrowserRouter([
       { path: "experiments", element: <ExperimentsList /> },
       { path: "experiments/new", element: <NewRunWizard /> },
       { path: "experiments/runs/:id", element: <RunDetail /> },
+      { path: "experiments/:id", element: <ExperimentDetail /> },
       { path: "models", element: <ModelsList /> },
       { path: "models/:id", element: <ModelDetail /> },
       { path: "deployments", element: <DeploymentsList /> },

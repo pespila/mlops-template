@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/atoms/Button";
 import { GlassCard } from "@/components/molecules/GlassCard";
@@ -9,6 +10,7 @@ import { formatRelative } from "@/lib/format";
 
 export function ExperimentsList() {
   const t = useT();
+  const navigate = useNavigate();
   const experiments = useQuery({
     queryKey: ["experiments"],
     queryFn: () => api.experiments.list(),
@@ -60,7 +62,11 @@ export function ExperimentsList() {
             </thead>
             <tbody className="divide-y divide-[color:var(--border)]">
               {experiments.data.map((exp) => (
-                <tr key={exp.id} className="hover:bg-bg-muted/60">
+                <tr
+                  key={exp.id}
+                  className="cursor-pointer hover:bg-bg-muted/60"
+                  onClick={() => navigate(`/experiments/${exp.id}`)}
+                >
                   <td className="px-6 py-3 font-medium text-fg1">{exp.name}</td>
                   <td className="px-6 py-3 text-fg2">{exp.description ?? "—"}</td>
                   <td className="px-6 py-3 text-right font-mono text-xs text-fg2">
