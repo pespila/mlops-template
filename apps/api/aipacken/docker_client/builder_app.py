@@ -145,6 +145,28 @@ async def stop_container(req: StopRequest) -> dict[str, Any]:
     return {"stopped": True, "container_id": req.container_id}
 
 
+@app.get("/wait/{container_id}")
+async def wait_container(container_id: str) -> dict[str, Any]:
+    """Block until the container exits and return its exit code.
+
+    Runs synchronously via docker-py `container.wait()`. Use off-thread when
+    calling from an async worker (see builder_client.wait).
+    """
+    client = get_docker()
+    try:
+        container = client.containers.get(container_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail="container_not_found") from exc
+    try:
+        result = container.wait(timeout=24 * 3600)
+    except APIError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "container_id": container_id,
+        "exit_code": int(result.get("StatusCode", -1)) if isinstance(result, dict) else -1,
+    }
+
+
 @app.get("/logs/{container_id}/stream")
 async def stream_logs(container_id: str) -> StreamingResponse:
     client = get_docker()

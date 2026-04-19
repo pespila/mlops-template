@@ -60,6 +60,12 @@ class BuilderClient:
             r.raise_for_status()
             return r.json()
 
+    async def wait(self, container_id: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=None) as c:
+            r = await c.get(f"/wait/{container_id}")
+            r.raise_for_status()
+            return r.json()
+
     async def stream_logs(self, container_id: str) -> httpx.Response:
         # Caller iterates lines via aiter_lines; kept open until iteration completes.
         client = httpx.AsyncClient(base_url=self._base_url, timeout=None)

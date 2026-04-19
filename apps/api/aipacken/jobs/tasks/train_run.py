@@ -123,14 +123,111 @@ async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         run.container_id = res["container_id"]
         await db.commit()
 
-    # Log tailing (separate scope) — pub/sub to the frontend-visible channel.
+    # Log tailing (separate scope) — pub/sub to the frontend-visible channel
+    # AND accumulate a local buffer so we can persist a full transcript when
+    # the container exits.
+    captured_lines: list[str] = []
     try:
         resp = await builder.stream_logs(res["container_id"])
         async for line in resp.aiter_lines():
             if line.startswith("data: "):
-                await publish(f"run:{run_id}:logs", line[len("data: ") :])
+                text = line[len("data: ") :]
+                captured_lines.append(text)
+                await publish(f"run:{run_id}:logs", text)
     except Exception as exc:
         logger.warning("train_run.log_tail_error", error=str(exc))
 
+    # Container exited — block for the final exit code so we know success/fail.
+    exit_code = -1
+    try:
+        wait_res = await builder.wait(res["container_id"])
+        exit_code = int(wait_res.get("exit_code", -1))
+    except Exception as exc:
+        logger.warning("train_run.wait_failed", error=str(exc))
+
+    from aipacken.db.models import Artifact, Metric, ModelVersion, RegisteredModel, Run
+
+    async with session_factory() as db:
+        run = await db.get(Run, run_id)
+        if run is None:
+            return {"status": "missing"}
+
+        # Persist logs to MinIO + register an Artifact row so refresh shows history.
+        if captured_lines:
+            import io as _io
+
+            from aipacken.services.minio_client import upload_fileobj
+
+            log_bytes = "\n".join(captured_lines).encode("utf-8")
+            log_key = f"{run_id}/logs/training.log"
+            try:
+                upload_fileobj(
+                    _io.BytesIO(log_bytes),
+                    bucket=settings.s3_bucket_artifacts,
+                    key=log_key,
+                    content_type="text/plain",
+                )
+                db.add(
+                    Artifact(
+                        run_id=run_id,
+                        kind="logs",
+                        uri=f"s3://{settings.s3_bucket_artifacts}/{log_key}",
+                        size_bytes=len(log_bytes),
+                        content_type="text/plain",
+                    )
+                )
+            except Exception as exc:
+                logger.warning("train_run.log_persist_failed", error=str(exc))
+
+        if exit_code != 0:
+            run.status = "failed"
+            run.error_message = f"trainer exited with code {exit_code}"
+            run.finished_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {"status": "failed", "exit_code": exit_code}
+
+        # Success path: sync metrics + model from MLflow into our own tables.
+        if mlflow_run_id:
+            try:
+                from aipacken.services.mlflow_client import get_mlflow_client
+
+                mc = get_mlflow_client()
+                mlflow_run = mc.get_run(mlflow_run_id)
+                for name, value in (mlflow_run.data.metrics or {}).items():
+                    db.add(Metric(run_id=run_id, name=name, value=float(value)))
+
+                artifact_uri = mlflow_run.info.artifact_uri
+                model_uri = f"{artifact_uri}/model"
+                db.add(
+                    Artifact(
+                        run_id=run_id,
+                        kind="model",
+                        uri=model_uri,
+                        content_type="application/x-mlflow-pyfunc",
+                    )
+                )
+
+                # Register a platform-side ModelVersion so the Deploy button appears.
+                model_name = f"{entry.name}-run-{run_id[:8]}"
+                reg = RegisteredModel(name=model_name, description=entry.description)
+                db.add(reg)
+                await db.flush()
+                db.add(
+                    ModelVersion(
+                        registered_model_id=reg.id,
+                        run_id=run_id,
+                        mlflow_version="1",
+                        stage="staging",
+                        input_schema_json={},
+                        output_schema_json={},
+                    )
+                )
+            except Exception as exc:
+                logger.warning("train_run.mlflow_sync_failed", error=str(exc))
+
+        run.status = "succeeded"
+        run.finished_at = datetime.now(timezone.utc)
+        await db.commit()
+
     await enqueue("analyze_run", run_id)
-    return {"status": "dispatched", "run_id": run_id, "container_id": res["container_id"]}
+    return {"status": "succeeded", "run_id": run_id, "exit_code": exit_code}
