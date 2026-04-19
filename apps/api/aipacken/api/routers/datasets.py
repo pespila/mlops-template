@@ -105,11 +105,11 @@ async def get_dataset_schema(
     dataset_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[FeatureSchema]:
+) -> list[FeatureSchemaRead]:
     d = await db.get(Dataset, dataset_id)
     if d is None:
         raise HTTPException(status_code=404, detail="dataset_not_found")
     rows = (
         await db.execute(select(FeatureSchema).where(FeatureSchema.dataset_id == dataset_id))
     ).scalars().all()
-    return list(rows)
+    return [FeatureSchemaRead.from_row(r) for r in rows]
