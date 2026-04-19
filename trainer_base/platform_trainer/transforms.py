@@ -97,9 +97,28 @@ def build_column_transformer(
     remainder_cols = [c for c in all_columns if c not in touched and c not in dropped]
 
     transformers = [(name, step, cols) for name, (step, cols) in grouped.items()]
+
+    # Smart defaults for any column the user didn't explicitly transform:
+    #   numeric    -> passthrough
+    #   categorical-> one-hot (handle_unknown=ignore so new categories at
+    #                 inference time don't blow up)
+    #   boolean    -> passthrough
+    #   text       -> drop (high-cardinality strings aren't tree-friendly;
+    #                 a proper vectorizer is a v1 feature)
     if remainder_cols:
-        # sklearn 1.5 rejects `__` in step names — use a plain identifier.
-        transformers.append(("passthrough_remainder", "passthrough", remainder_cols))
+        numeric_default = [c for c in remainder_cols if schema.get(c) in ("numeric", "boolean")]
+        categorical_default = [c for c in remainder_cols if schema.get(c) == "categorical"]
+        # text columns fall into neither bucket → implicitly dropped
+        if numeric_default:
+            transformers.append(("auto_passthrough", "passthrough", numeric_default))
+        if categorical_default:
+            transformers.append(
+                (
+                    "auto_onehot",
+                    OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                    categorical_default,
+                )
+            )
 
     if not transformers:
         raise ValueError("transform config produced no active columns")

@@ -126,6 +126,26 @@ def main() -> int:
         task = transforms.infer_task(df[target])
         logger.info("task.inferred", extra={"task": task, "rows": len(df)})
 
+        # Auto label-encode non-numeric classification targets so every adapter
+        # (XGBoost/LightGBM/AutoGluon/sklearn) sees numeric y. Encoder is
+        # preserved and logged so serving can inverse_transform the prediction.
+        target_label_encoder = None
+        target_classes: list[str] | None = None
+        if task == "classification":
+            y_series = df[target]
+            import pandas as _pd
+
+            if not _pd.api.types.is_numeric_dtype(y_series) or _pd.api.types.is_bool_dtype(y_series):
+                from sklearn.preprocessing import LabelEncoder
+
+                target_label_encoder = LabelEncoder().fit(y_series)
+                df[target] = target_label_encoder.transform(y_series)
+                target_classes = [str(c) for c in target_label_encoder.classes_]
+                logger.info(
+                    "target.label_encoded",
+                    extra={"classes": target_classes, "n": len(target_classes)},
+                )
+
         X_train, X_val, X_test, y_train, y_val, y_test = transforms.apply_split(
             df, target=target, split_config=transform_cfg.get("split") or {}, task=task,
         )
