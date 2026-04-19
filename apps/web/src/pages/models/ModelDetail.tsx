@@ -45,18 +45,29 @@ export function ModelDetail() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[color:var(--border)]">
-              {model.data.versions.map((v) => (
-                <tr key={v.id} className="hover:bg-bg-muted/60">
-                  <td className="px-6 py-3 font-mono text-xs text-fg1">v{v.version}</td>
-                  <td className="px-6 py-3 font-mono text-xs text-fg2">{v.run_id.slice(0, 8)}</td>
-                  <td className="px-6 py-3 text-xs text-fg2">
-                    {Object.entries(v.metrics)
-                      .map(([k, val]) => `${k}: ${formatNumber(val, 3)}`)
-                      .join(" · ")}
-                  </td>
-                  <td className="px-6 py-3 text-xs text-fg2">{formatRelative(v.created_at)}</td>
-                </tr>
-              ))}
+              {(model.data?.versions ?? []).map((v) => {
+                const version = (v as { mlflow_version?: string | null; version?: number }).mlflow_version
+                  ?? (v as { version?: number }).version
+                  ?? "1";
+                const metrics =
+                  ((v as { metrics?: Record<string, number> }).metrics) ?? {};
+                return (
+                  <tr key={v.id} className="hover:bg-bg-muted/60">
+                    <td className="px-6 py-3 font-mono text-xs text-fg1">v{version}</td>
+                    <td className="px-6 py-3 font-mono text-xs text-fg2">
+                      {v.run_id.slice(0, 8)}
+                    </td>
+                    <td className="px-6 py-3 text-xs text-fg2">
+                      {Object.entries(metrics)
+                        .map(([k, val]) => `${k}: ${formatNumber(val, 3)}`)
+                        .join(" · ") || "—"}
+                    </td>
+                    <td className="px-6 py-3 text-xs text-fg2">
+                      {formatRelative(v.created_at)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

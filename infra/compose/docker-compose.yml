@@ -5,6 +5,14 @@ x-api-common: &api-common
   image: platform/api:latest
   env_file:
     - ../../.env
+  environment:
+    # Needed so the MLflow client + boto3 can list/fetch artifacts from MinIO
+    # (artifact_uri is s3://…; without creds list_artifacts raises
+    # "Unable to locate credentials").
+    AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+    AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
+    MLFLOW_S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
   depends_on:
     postgres:
       condition: service_healthy
