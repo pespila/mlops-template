@@ -7,7 +7,16 @@ from typing import Any
 import structlog
 
 from aipacken.config import get_settings
-from aipacken.db.models import Dataset, ModelCatalogEntry, Run, TransformConfig
+from aipacken.db.models import (
+    Artifact,
+    Dataset,
+    Metric,
+    ModelCatalogEntry,
+    ModelVersion,
+    RegisteredModel,
+    Run,
+    TransformConfig,
+)
 from aipacken.docker_client.builder_client import get_builder_client
 from aipacken.jobs.queue import enqueue
 from aipacken.services.minio_client import presign_get
@@ -144,8 +153,6 @@ async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         exit_code = int(wait_res.get("exit_code", -1))
     except Exception as exc:
         logger.warning("train_run.wait_failed", error=str(exc))
-
-    from aipacken.db.models import Artifact, Metric, ModelVersion, RegisteredModel, Run
 
     async with session_factory() as db:
         run = await db.get(Run, run_id)
