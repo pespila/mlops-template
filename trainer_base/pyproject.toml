@@ -14,6 +14,7 @@ dependencies = [
   "fairlearn==0.11.0",
   "pydantic==2.9.2",
   "joblib==1.4.2",
+  "matplotlib==3.9.2",
 ]
 
 [project.optional-dependencies]

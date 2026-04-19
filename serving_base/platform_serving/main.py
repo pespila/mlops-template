@@ -1,27 +1,130 @@
 """Serving container FastAPI app.
 
-On startup the container reads MODEL_URI (an MLflow model URI) and loads the
-model via mlflow.pyfunc. The Pydantic input/output schemas are derived from
-signature metadata captured at training time.
-
-Full implementation lands in the next commit — this file provides /healthz and
-a stub /predict so the base image builds and the Traefik label routing works
-end-to-end.
+Loads an MLflow model at startup, derives a Pydantic input model from the
+captured JSON Schema and exposes JSON + batch prediction endpoints.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import io
+import os
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
+
+import pandas as pd
+import structlog
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from platform_serving import __version__
+from platform_serving.batch import iter_chunks
+from platform_serving.loader import load as load_model
+from platform_serving.logging_middleware import PredictionLogMiddleware
+from platform_serving.schema import pydantic_from_schema
 
-app = FastAPI(title="AIpacken Serving", version=__version__)
+
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.add_log_level,
+        structlog.processors.JSONRenderer(),
+    ]
+)
+log = structlog.get_logger("serving")
+
+
+class PredictResponse(BaseModel):
+    prediction: Any
+    model_version: str
+    trace_id: str
 
 
 class HealthResponse(BaseModel):
     status: str
     version: str
+
+
+class State:
+    """Module-level mutable container; populated during lifespan startup."""
+
+    model: Any = None
+    input_schema: dict[str, Any] = {}
+    output_schema: dict[str, Any] = {}
+    input_model: type[BaseModel] | None = None
+    sample_row: dict[str, Any] | None = None
+    model_uri: str = ""
+
+
+state = State()
+
+
+def _sample_row_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Build a minimal valid row so /ready can do a real inference."""
+    sample: dict[str, Any] = {}
+    for name, spec in (schema.get("properties") or {}).items():
+        if not isinstance(spec, dict):
+            sample[name] = ""
+            continue
+        t = spec.get("type", "string")
+        if isinstance(t, list):
+            t = next((x for x in t if x != "null"), "string")
+        if "enum" in spec and spec["enum"]:
+            sample[name] = spec["enum"][0]
+        elif t == "integer":
+            sample[name] = 0
+        elif t == "number":
+            sample[name] = 0.0
+        elif t == "boolean":
+            sample[name] = False
+        else:
+            sample[name] = ""
+    return sample
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    model_uri = os.environ.get("MODEL_URI", "")
+    state.model_uri = model_uri
+    log.info("serving.startup", model_uri=model_uri)
+
+    if not model_uri:
+        # Allow the container to boot for /health checks even without a model,
+        # so operators can diagnose misconfiguration.
+        log.error("serving.no_model_uri")
+        yield
+        return
+
+    try:
+        model, input_schema, output_schema = load_model(model_uri)
+    except Exception as exc:
+        log.error("serving.load_failed", error=str(exc))
+        raise
+
+    state.model = model
+    state.input_schema = input_schema
+    state.output_schema = output_schema
+    state.input_model = pydantic_from_schema(input_schema, model_name="ModelInput")
+    state.sample_row = _sample_row_from_schema(input_schema)
+    log.info("serving.ready", features=len(input_schema.get("properties") or {}))
+    yield
+    log.info("serving.shutdown")
+
+
+app = FastAPI(title="AIpacken Serving", version=__version__, lifespan=lifespan)
+app.add_middleware(PredictionLogMiddleware)
+
+
+def _predict_df(df: pd.DataFrame) -> pd.DataFrame:
+    if state.model is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+    preds = state.model.predict(df)
+    if isinstance(preds, pd.DataFrame):
+        return preds
+    if isinstance(preds, pd.Series):
+        return preds.to_frame(name="prediction")
+    return pd.DataFrame({"prediction": list(preds)})
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -31,10 +134,79 @@ async def health() -> HealthResponse:
 
 @app.get("/ready", response_model=HealthResponse)
 async def ready() -> HealthResponse:
-    # Real readiness check (run a tiny inference against a cached sample) lands next commit.
-    return HealthResponse(status="ok", version=__version__)
+    if state.model is None or state.sample_row is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+    try:
+        _predict_df(pd.DataFrame([state.sample_row]))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"inference_failed: {exc}") from exc
+    return HealthResponse(status="ready", version=__version__)
 
 
-@app.post("/predict", status_code=501)
-async def predict(_body: dict) -> dict[str, str]:
-    return {"error": "not_implemented", "detail": "serving.predict arrives in the next commit"}
+@app.get("/schema")
+async def schema() -> dict[str, Any]:
+    return {"input": state.input_schema, "output": state.output_schema}
+
+
+@app.post("/predict", response_model=PredictResponse)
+async def predict(request: Request) -> PredictResponse:
+    if state.input_model is None or state.model is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+
+    raw = await request.json()
+    try:
+        parsed = state.input_model(**(raw if isinstance(raw, dict) else {}))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    df = pd.DataFrame([parsed.model_dump()])
+    result = _predict_df(df)
+    prediction_value = result.iloc[0].to_dict() if result.shape[1] > 1 else result.iloc[0, 0]
+
+    return PredictResponse(
+        prediction=_coerce_json(prediction_value),
+        model_version=state.model_uri,
+        trace_id=request.headers.get("x-trace-id", str(uuid.uuid4())),
+    )
+
+
+@app.post("/predict/batch")
+async def predict_batch(file: UploadFile = File(...)) -> StreamingResponse:
+    if state.model is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+
+    async def _stream() -> AsyncIterator[bytes]:
+        first = True
+        try:
+            for chunk in iter_chunks(file, chunk_size=1000):
+                preds = _predict_df(chunk)
+                merged = chunk.reset_index(drop=True).join(preds.reset_index(drop=True), rsuffix="_pred")
+                buf = io.StringIO()
+                merged.to_csv(buf, index=False, header=first)
+                yield buf.getvalue().encode("utf-8")
+                first = False
+        except ValueError as exc:
+            # Uncaught ValueErrors here usually come from an unknown file type.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    headers = {"content-disposition": "attachment; filename=predictions.csv"}
+    return StreamingResponse(_stream(), media_type="text/csv", headers=headers)
+
+
+@app.exception_handler(HTTPException)
+async def _http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse:  # noqa: ARG001
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+
+def _coerce_json(value: Any) -> Any:
+    """Ensure numpy/pandas scalars serialize cleanly."""
+    try:
+        import numpy as np
+
+        if isinstance(value, (np.generic,)):
+            return value.item()
+    except Exception:
+        pass
+    if isinstance(value, (pd.Timestamp,)):
+        return value.isoformat()
+    return value

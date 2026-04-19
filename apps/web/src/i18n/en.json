@@ -1,0 +1,92 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "datasets": "Datasets",
+    "experiments": "Experiments",
+    "models": "Models",
+    "deployments": "Deployments",
+    "settings": "Settings"
+  },
+  "common": {
+    "loading": "Loading",
+    "error": "Something went wrong",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "save": "Save",
+    "back": "Back",
+    "next": "Next",
+    "close": "Close",
+    "copy": "Copy",
+    "copied": "Copied",
+    "empty": "Nothing here yet"
+  },
+  "dashboard": {
+    "eyebrow": "Platform · v0",
+    "headline": "Train, deploy, and query ML models - all on your own machine.",
+    "subhead": "Upload a dataset, pick a model (including AutoGluon, zero-config), and deploy to a live API. No cloud dependencies. Your data never leaves the host.",
+    "ctaPrimary": "Start a new run →",
+    "ctaGhost": "Browse datasets →",
+    "stepUpload": "Bring your own data",
+    "stepTrain": "Pick a model - or let AutoGluon",
+    "stepDeploy": "One click to a live API"
+  },
+  "auth": {
+    "loginTitle": "Sign in to AIpacken",
+    "loginSubtitle": "Use your workspace credentials.",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in →",
+    "invalid": "Invalid email or password."
+  },
+  "datasets": {
+    "title": "Datasets",
+    "subtitle": "Upload tabular data and profile columns automatically.",
+    "uploadCta": "Upload dataset →",
+    "columns": {
+      "name": "Name",
+      "rows": "Rows",
+      "cols": "Columns",
+      "status": "Status",
+      "created": "Created"
+    },
+    "empty": "No datasets yet. Upload your first CSV or Parquet file to begin."
+  },
+  "experiments": {
+    "title": "Experiments",
+    "subtitle": "Group related training runs and track progress over time.",
+    "newRun": "New run →",
+    "empty": "No experiments yet. Start a new run to create one."
+  },
+  "wizard": {
+    "step1": "Dataset",
+    "step2": "Profile",
+    "step3": "Features",
+    "step4": "Target and split",
+    "step5": "Model",
+    "finish": "Start training →"
+  },
+  "deployments": {
+    "title": "Deployments",
+    "subtitle": "Live endpoints for your trained model versions.",
+    "newCta": "New deployment →",
+    "empty": "No deployments yet. Promote a model version to a live endpoint.",
+    "tabs": {
+      "overview": "Overview",
+      "test": "Test",
+      "predictions": "Predictions",
+      "logs": "Logs"
+    }
+  },
+  "models": {
+    "title": "Models",
+    "subtitle": "Registered model versions ready for deployment.",
+    "empty": "No models registered yet. Finish a run to register a version."
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Platform configuration.",
+    "version": "Platform version",
+    "disk": "Disk usage",
+    "language": "Language"
+  }
+}

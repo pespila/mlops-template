@@ -1,0 +1,92 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "datasets": "Datensätze",
+    "experiments": "Experimente",
+    "models": "Modelle",
+    "deployments": "Deployments",
+    "settings": "Einstellungen"
+  },
+  "common": {
+    "loading": "Lade",
+    "error": "Etwas ist schiefgelaufen",
+    "retry": "Erneut versuchen",
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "back": "Zurück",
+    "next": "Weiter",
+    "close": "Schließen",
+    "copy": "Kopieren",
+    "copied": "Kopiert",
+    "empty": "Noch nichts vorhanden"
+  },
+  "dashboard": {
+    "eyebrow": "Plattform · v0",
+    "headline": "ML-Modelle trainieren, deployen und abfragen - alles auf Ihrem Rechner.",
+    "subhead": "Datensatz hochladen, Modell auswählen (inklusive AutoGluon, ohne Konfiguration), und als Live-API deployen. Keine Cloud-Abhängigkeiten. Ihre Daten verlassen den Host nicht.",
+    "ctaPrimary": "Neuen Run starten →",
+    "ctaGhost": "Datensätze durchsuchen →",
+    "stepUpload": "Ihre eigenen Daten einbringen",
+    "stepTrain": "Modell wählen - oder AutoGluon lassen",
+    "stepDeploy": "Ein Klick zur Live-API"
+  },
+  "auth": {
+    "loginTitle": "Bei AIpacken anmelden",
+    "loginSubtitle": "Nutzen Sie Ihre Workspace-Zugangsdaten.",
+    "email": "E-Mail",
+    "password": "Passwort",
+    "submit": "Anmelden →",
+    "invalid": "Ungültige E-Mail oder Passwort."
+  },
+  "datasets": {
+    "title": "Datensätze",
+    "subtitle": "Tabellarische Daten hochladen und Spalten automatisch profilieren.",
+    "uploadCta": "Datensatz hochladen →",
+    "columns": {
+      "name": "Name",
+      "rows": "Zeilen",
+      "cols": "Spalten",
+      "status": "Status",
+      "created": "Erstellt"
+    },
+    "empty": "Noch keine Datensätze. Laden Sie Ihre erste CSV- oder Parquet-Datei hoch."
+  },
+  "experiments": {
+    "title": "Experimente",
+    "subtitle": "Verwandte Trainingsläufe gruppieren und Fortschritt verfolgen.",
+    "newRun": "Neuer Run →",
+    "empty": "Noch keine Experimente. Starten Sie einen Run, um eines anzulegen."
+  },
+  "wizard": {
+    "step1": "Datensatz",
+    "step2": "Profil",
+    "step3": "Features",
+    "step4": "Ziel und Split",
+    "step5": "Modell",
+    "finish": "Training starten →"
+  },
+  "deployments": {
+    "title": "Deployments",
+    "subtitle": "Live-Endpoints für Ihre trainierten Modellversionen.",
+    "newCta": "Neues Deployment →",
+    "empty": "Noch keine Deployments. Stellen Sie eine Modellversion als Live-Endpoint bereit.",
+    "tabs": {
+      "overview": "Übersicht",
+      "test": "Testen",
+      "predictions": "Vorhersagen",
+      "logs": "Logs"
+    }
+  },
+  "models": {
+    "title": "Modelle",
+    "subtitle": "Registrierte Modellversionen, bereit für das Deployment.",
+    "empty": "Noch keine Modelle registriert. Beenden Sie einen Run, um eine Version zu registrieren."
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "subtitle": "Plattform-Konfiguration.",
+    "version": "Plattform-Version",
+    "disk": "Speicherverbrauch",
+    "language": "Sprache"
+  }
+}

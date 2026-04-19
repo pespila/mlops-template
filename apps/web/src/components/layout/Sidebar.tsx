@@ -1,29 +1,41 @@
 import { BarChart3, Boxes, Database, LayoutDashboard, Rocket, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
-import { clsx } from "clsx";
+import { useT } from "@/i18n";
+import { cn } from "@/lib/cn";
+import { useUiStore } from "@/state/uiStore";
 
 const items = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/datasets", label: "Datasets", icon: Database },
-  { to: "/experiments", label: "Experiments", icon: BarChart3 },
-  { to: "/models", label: "Models", icon: Boxes },
-  { to: "/deployments", label: "Deployments", icon: Rocket },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/", key: "nav.dashboard", icon: LayoutDashboard, end: true },
+  { to: "/datasets", key: "nav.datasets", icon: Database },
+  { to: "/experiments", key: "nav.experiments", icon: BarChart3 },
+  { to: "/models", key: "nav.models", icon: Boxes },
+  { to: "/deployments", key: "nav.deployments", icon: Rocket },
+  { to: "/settings", key: "nav.settings", icon: Settings },
 ];
 
 export function Sidebar() {
+  const t = useT();
+  const collapsed = useUiStore((s) => s.sidebarCollapsed);
+
   return (
-    <aside className="w-64 min-h-screen border-r border-border bg-bg-soft px-4 py-6">
-      <div className="px-2 mb-8">
+    <aside
+      className={cn(
+        "min-h-screen border-r border-border bg-bg-soft px-4 py-6 transition-[width]",
+        collapsed ? "w-20" : "w-64",
+      )}
+    >
+      <div className="mb-8 px-2">
         <div className="flex items-center gap-2">
           <img src="/logo.svg" alt="" className="h-8 w-8" />
-          <div>
-            <div className="font-display font-extrabold text-lg tracking-tight text-fg1">
-              AIpacken
+          {!collapsed ? (
+            <div>
+              <div className="font-display text-lg font-extrabold tracking-tight text-fg1">
+                AIpacken
+              </div>
+              <div className="font-subtext text-xs tracking-wide text-fg2">AI Platform</div>
             </div>
-            <div className="font-subtext text-xs text-fg2 tracking-wide">AI Platform</div>
-          </div>
+          ) : null}
         </div>
       </div>
       <nav className="flex flex-col gap-1">
@@ -33,16 +45,16 @@ export function Sidebar() {
             to={item.to}
             end={item.end}
             className={({ isActive }) =>
-              clsx(
-                "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+              cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 isActive
                   ? "bg-primary-soft text-primary"
-                  : "text-fg2 hover:text-fg1 hover:bg-bg-muted",
+                  : "text-fg2 hover:bg-bg-muted hover:text-fg1",
               )
             }
           >
             <item.icon size={18} strokeWidth={2} />
-            <span>{item.label}</span>
+            {!collapsed ? <span>{t(item.key)}</span> : null}
           </NavLink>
         ))}
       </nav>

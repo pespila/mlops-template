@@ -29,6 +29,12 @@ dependencies = [
   "shap==0.46.0",
   "fairlearn==0.11.0",
   "watchfiles==0.24.0",
+  "passlib[bcrypt]==1.7.4",
+  "python-jose[cryptography]==3.3.0",
+  "aiosqlite==0.20.0",
+  "httpx-sse==0.4.0",
+  "uuid6==2024.7.10",
+  "email-validator==2.2.0",
 ]
 
 [project.optional-dependencies]

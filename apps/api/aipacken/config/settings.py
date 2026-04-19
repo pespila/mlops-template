@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     session_cookie_name: str = "platform_session"
     session_max_age_seconds: int = 86400
 
+    internal_hmac_token: str = "change-me-internal-hmac-token"
+
+    trainer_base_image: str = "platform/trainer-base:latest"
+    serving_base_image: str = "platform/serving-base:latest"
+    models_network: str = "models-net"
+
+    prediction_retention_days: int = 90
+    artifact_retention_days: int = 90
+
 
 @lru_cache
 def get_settings() -> Settings:
