@@ -7,7 +7,7 @@ services:
       PLATFORM_ENV: dev
 
   worker:
-    command: ["watchfiles", "--filter", "python", "--signal", "SIGTERM", "arq aipacken.jobs.worker.WorkerSettings", "/app/aipacken"]
+    command: ["watchfiles", "--filter", "python", "arq aipacken.jobs.worker.WorkerSettings", "/app/aipacken"]
     volumes:
       - ../../apps/api:/app
     environment:

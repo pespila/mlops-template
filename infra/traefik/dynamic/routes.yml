@@ -1,0 +1,47 @@
+http:
+  routers:
+    api:
+      rule: "PathPrefix(`/api`) || PathPrefix(`/sse`) || PathPrefix(`/openapi.json`) || PathPrefix(`/docs`)"
+      entryPoints: [web]
+      service: api
+      priority: 100
+    mlflow:
+      rule: "PathPrefix(`/mlflow`)"
+      entryPoints: [web]
+      service: mlflow
+      middlewares: [mlflow-strip]
+      priority: 90
+    minio-console:
+      rule: "PathPrefix(`/minio-console`)"
+      entryPoints: [web]
+      service: minio-console
+      priority: 80
+    frontend:
+      rule: "PathPrefix(`/`)"
+      entryPoints: [web]
+      service: frontend
+      priority: 1
+
+  services:
+    api:
+      loadBalancer:
+        servers:
+          - url: "http://api:8000"
+    mlflow:
+      loadBalancer:
+        servers:
+          - url: "http://mlflow:5000"
+    minio-console:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9001"
+    frontend:
+      loadBalancer:
+        servers:
+          - url: "http://frontend:80"
+
+  middlewares:
+    mlflow-strip:
+      stripPrefix:
+        prefixes:
+          - "/mlflow"

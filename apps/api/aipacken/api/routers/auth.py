@@ -24,9 +24,10 @@ async def login(
     return user
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: Request) -> None:
+@router.post("/logout")
+async def logout(request: Request) -> dict[str, bool]:
     request.session.clear()
+    return {"ok": True}
 
 
 @router.get("/me", response_model=UserRead)

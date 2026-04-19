@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DeploymentCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_version_id: str
     name: str
     replicas: int = 1
@@ -14,7 +16,7 @@ class DeploymentCreate(BaseModel):
 
 
 class DeploymentRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     id: str
     model_version_id: str
@@ -42,6 +44,8 @@ class PredictRequest(BaseModel):
 
 
 class PredictResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     prediction: Any
     model_version: str | None = None
     trace_id: str | None = None

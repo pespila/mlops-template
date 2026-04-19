@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict
 
 
 class RunCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     experiment_id: str
     dataset_id: str
     model_catalog_id: str
@@ -17,7 +19,7 @@ class RunCreate(BaseModel):
 
 
 class RunRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     id: str
     experiment_id: str
