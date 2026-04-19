@@ -61,12 +61,16 @@ async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             "DATASET_URI": dataset_uri,
             "TRANSFORM_CONFIG": json.dumps(
                 {
-                    "target_column": tcfg.target_column,
-                    "transforms": tcfg.transforms_json,
-                    "split": tcfg.split_json,
+                    "target": tcfg.target_column,
+                    "target_column": tcfg.target_column,  # alias for older trainer images
+                    "transforms": tcfg.transforms_json or [],
+                    "split": tcfg.split_json or {"train": 0.7, "val": 0.15, "test": 0.15},
                     "sensitive_features": tcfg.sensitive_features or [],
                 }
             ),
+            "SENSITIVE_FEATURES": json.dumps(tcfg.sensitive_features or []),
+            "ARTIFACT_BUCKET": settings.s3_bucket_artifacts,
+            "MLFLOW_EXPERIMENT_ID": exp_id or "",
             "MODEL_CATALOG": json.dumps(
                 {
                     "kind": entry.kind,
