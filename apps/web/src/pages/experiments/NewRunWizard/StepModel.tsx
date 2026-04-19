@@ -13,7 +13,20 @@ import { useWizardStore } from "@/state/wizardStore";
 
 type Tab = "builtin" | "custom";
 
-const HIGHLIGHT_FAMILIES = ["logistic", "gradient_boosting", "autogluon"];
+const HIGHLIGHT_FAMILIES = ["logistic", "gradient_boosting", "xgboost", "lightgbm", "autogluon"];
+
+const DISPLAY_NAMES: Record<string, string> = {
+  sklearn_logistic: "Logistic Regression",
+  sklearn_gradient_boosting: "Gradient Boosting",
+  xgboost: "XGBoost",
+  lightgbm: "LightGBM",
+  autogluon: "AutoGluon",
+};
+
+function displayName(entry: ModelCatalogEntry): string {
+  const key = (entry.family || entry.name || "").toLowerCase();
+  return DISPLAY_NAMES[key] ?? entry.name;
+}
 
 function ModelPickerCard({
   entry,
@@ -24,24 +37,26 @@ function ModelPickerCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const isAutogluon = entry.family.toLowerCase().includes("autogluon");
+  const isAutogluon = (entry.family || "").toLowerCase().includes("autogluon");
   return (
     <button
       type="button"
       onClick={onSelect}
       className={cn(
-        "glass-card !p-6 text-left transition-all",
+        "glass-card !p-5 text-left transition-all flex flex-col min-w-0",
         selected && "border-primary ring-2 ring-[color:var(--primary-soft)]",
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <IconTile icon={isAutogluon ? Sparkles : Zap} size={48} />
+      <div className="flex items-start justify-between gap-2">
+        <IconTile icon={isAutogluon ? Sparkles : Zap} size={40} />
         {isAutogluon ? (
-          <span className="badge-glow">Zero-config</span>
+          <span className="badge-glow whitespace-nowrap text-[10px]">Zero-config</span>
         ) : null}
       </div>
-      <h3 className="mt-4 font-display text-lg font-bold text-fg1">{entry.name}</h3>
-      <p className="mt-1 text-sm text-fg2">{entry.description}</p>
+      <h3 className="mt-4 font-display text-base font-bold text-fg1 break-words">
+        {displayName(entry)}
+      </h3>
+      <p className="mt-1 text-xs text-fg2 line-clamp-3">{entry.description}</p>
     </button>
   );
 }
