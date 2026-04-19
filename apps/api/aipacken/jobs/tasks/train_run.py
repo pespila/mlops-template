@@ -33,7 +33,32 @@ def _parse_s3_uri(uri: str) -> tuple[str, str]:
     return bucket, key
 
 
+async def _mark_run_failed(session_factory: Any, run_id: str, error: str) -> None:
+    """Best-effort safety net — never leave a Run stuck in queued/running."""
+    try:
+        async with session_factory() as db:
+            r = await db.get(Run, run_id)
+            if r is None or r.status in {"succeeded", "failed", "cancelled"}:
+                return
+            r.status = "failed"
+            r.error_message = error[:2000]
+            r.finished_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("train_run.mark_failed_error", error=str(exc))
+
+
 async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
+    try:
+        return await _train_run_inner(ctx, run_id)
+    except Exception as exc:
+        logger.exception("train_run.fatal")
+        await _mark_run_failed(ctx["session_factory"], run_id, f"{type(exc).__name__}: {exc}")
+        await publish(f"run:{run_id}:logs", f"FATAL: {type(exc).__name__}: {exc}")
+        raise
+
+
+async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
     session_factory = ctx["session_factory"]
     settings = get_settings()
 

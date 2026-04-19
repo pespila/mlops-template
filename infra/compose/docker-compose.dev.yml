@@ -14,6 +14,7 @@ services:
       PLATFORM_ENV: dev
 
   builder:
+    command: ["uvicorn", "aipacken.docker_client.builder_app:app", "--host", "0.0.0.0", "--port", "8080", "--reload", "--reload-dir", "/app/aipacken"]
     volumes:
       - ../../apps/api:/app
     environment:
