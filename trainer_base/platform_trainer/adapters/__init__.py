@@ -12,6 +12,10 @@ def get_adapter(kind: str) -> Any:
         from . import sklearn_like
 
         return sklearn_like
+    if kind in ("xgboost", "lightgbm"):
+        from . import boosted_trees
+
+        return boosted_trees
     if kind == "autogluon":
         from . import autogluon as autogluon_adapter
 

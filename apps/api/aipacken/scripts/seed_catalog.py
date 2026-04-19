@@ -40,6 +40,33 @@ CATALOG: list[dict[str, Any]] = [
     },
     {
         "kind": "classification",
+        "name": "xgboost",
+        "framework": "xgboost",
+        "description": "XGBoost Classifier — gradient-boosted trees.",
+        "signature_json": {
+            "hyperparams": {
+                "n_estimators": {"type": "int", "default": 200, "min": 10, "max": 5000},
+                "max_depth": {"type": "int", "default": 6, "min": 1, "max": 16},
+                "learning_rate": {"type": "float", "default": 0.1, "min": 0.001, "max": 1.0},
+                "subsample": {"type": "float", "default": 1.0, "min": 0.1, "max": 1.0},
+            },
+        },
+    },
+    {
+        "kind": "classification",
+        "name": "lightgbm",
+        "framework": "lightgbm",
+        "description": "LightGBM Classifier — fast gradient-boosted trees.",
+        "signature_json": {
+            "hyperparams": {
+                "n_estimators": {"type": "int", "default": 200, "min": 10, "max": 5000},
+                "num_leaves": {"type": "int", "default": 31, "min": 2, "max": 4096},
+                "learning_rate": {"type": "float", "default": 0.1, "min": 0.001, "max": 1.0},
+            },
+        },
+    },
+    {
+        "kind": "classification",
         "name": "autogluon",
         "framework": "autogluon",
         "description": "AutoGluon TabularPredictor — zero-config AutoML.",

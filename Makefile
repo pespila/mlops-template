@@ -51,7 +51,7 @@ help:
 	@echo "[bootstrap] .env created. Review and edit PLATFORM_ADMIN_PASSWORD before exposing."
 
 .PHONY: dev
-dev: .env
+dev: .env build-bases
 	$(COMPOSE_DEV_CMD) up --build
 
 .PHONY: up
@@ -105,5 +105,7 @@ openapi:
 
 .PHONY: build-bases
 build-bases:
-	docker build -t platform/trainer-base:latest trainer_base/
-	docker build -t platform/serving-base:latest serving_base/
+	@echo "[build-bases] building platform/trainer-base:latest (may be slow on first run)"
+	$(DOCKER) build -t platform/trainer-base:latest trainer_base/
+	@echo "[build-bases] building platform/serving-base:latest"
+	$(DOCKER) build -t platform/serving-base:latest serving_base/
