@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Sparkles, Zap } from "lucide-react";
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/atoms/Button";
 import { IconTile } from "@/components/atoms/IconTile";
@@ -64,7 +64,9 @@ function ModelPickerCard({
 export function StepModel() {
   const t = useT();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<Tab>("builtin");
+  const [experimentMode, setExperimentMode] = useState<"existing" | "new">("existing");
   const datasetId = useWizardStore((s) => s.datasetId);
   const transforms = useWizardStore((s) => s.transforms);
   const target = useWizardStore((s) => s.target);
@@ -74,6 +76,8 @@ export function StepModel() {
   const hyperparams = useWizardStore((s) => s.hyperparams);
   const experimentName = useWizardStore((s) => s.experimentName);
   const setExperimentName = useWizardStore((s) => s.setExperimentName);
+  const experimentId = useWizardStore((s) => s.experimentId);
+  const setExperimentId = useWizardStore((s) => s.setExperimentId);
   const prev = useWizardStore((s) => s.prev);
   const reset = useWizardStore((s) => s.reset);
 
@@ -82,22 +86,48 @@ export function StepModel() {
     queryFn: () => api.catalog.models(),
   });
 
+  const experiments = useQuery({
+    queryKey: ["experiments"],
+    queryFn: () => api.experiments.list(),
+  });
+
+  // URL ?experiment=<id> preselects an existing experiment (from ExperimentDetail
+  // "New run →"); otherwise pick the most recent one by default.
+  useEffect(() => {
+    const preset = searchParams.get("experiment");
+    if (preset) {
+      setExperimentId(preset);
+      setExperimentMode("existing");
+      return;
+    }
+    if (!experimentId && experiments.data && experiments.data.length > 0) {
+      setExperimentId(experiments.data[0].id);
+    }
+    if (experiments.data && experiments.data.length === 0) {
+      setExperimentMode("new");
+    }
+  }, [experiments.data, experimentId, searchParams, setExperimentId]);
+
   const startRun = useMutation({
     mutationFn: async () => {
       if (!datasetId || !target || !modelCatalogId) throw new Error("Wizard incomplete");
-      const experiment = await api.experiments.create({
-        name: experimentName.trim() || `Run ${new Date().toISOString().slice(0, 16)}`,
-      });
+      let expId = experimentMode === "existing" ? experimentId : null;
+      if (!expId) {
+        const exp = await api.experiments.create({
+          name: experimentName.trim() || `Experiment ${new Date().toISOString().slice(0, 16)}`,
+        });
+        expId = exp.id;
+      }
       const run = await api.runs.create({
-        experiment_id: experiment.id,
+        experiment_id: expId,
         dataset_id: datasetId,
         transform_config: { target, split, features: transforms },
         model_catalog_id: modelCatalogId,
         hyperparams,
       });
-      return run;
+      return { run, experimentId: expId };
     },
-    onSuccess: (run) => {
+    onSuccess: ({ run }) => {
       reset();
       navigate(`/experiments/runs/${run.id}`);
     },
@@ -164,24 +194,62 @@ export function StepModel() {
         </GlassCard>
       )}
 
-      <label className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-3">
         <span className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
-          Experiment name
+          Experiment
         </span>
-        <input
-          value={experimentName}
-          onChange={(ev) => setExperimentName(ev.target.value)}
-          placeholder="Churn - baseline gradient boosting"
-          className="w-full max-w-md rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none"
-        />
-      </label>
+        <div role="tablist" className="inline-flex overflow-hidden rounded-pill border border-[color:var(--border-primary)] self-start text-[11px]">
+          {(["existing", "new"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setExperimentMode(m)}
+              disabled={m === "existing" && (experiments.data?.length ?? 0) === 0}
+              className={cn(
+                "px-3 py-1.5 font-semibold uppercase tracking-[0.08em] transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+                experimentMode === m
+                  ? "bg-primary text-white"
+                  : "bg-bg text-fg2 hover:text-fg1",
+              )}
+            >
+              {m === "existing" ? "Add to existing" : "Create new"}
+            </button>
+          ))}
+        </div>
+
+        {experimentMode === "existing" ? (
+          <select
+            value={experimentId ?? ""}
+            onChange={(ev) => setExperimentId(ev.target.value || null)}
+            className="w-full max-w-md rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none"
+          >
+            {(experiments.data ?? []).map((exp) => (
+              <option key={exp.id} value={exp.id}>
+                {exp.name}
+                {exp.run_count ? ` · ${exp.run_count} run${exp.run_count > 1 ? "s" : ""}` : ""}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            value={experimentName}
+            onChange={(ev) => setExperimentName(ev.target.value)}
+            placeholder="Churn - baseline gradient boosting"
+            className="w-full max-w-md rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none"
+          />
+        )}
+      </div>
 
       <div className="flex justify-between">
         <Button variant="ghost" onClick={prev}>
           Back
         </Button>
         <Button
-          disabled={!modelCatalogId || startRun.isPending}
+          disabled={
+            !modelCatalogId ||
+            startRun.isPending ||
+            (experimentMode === "existing" && !experimentId)
+          }
           onClick={() => startRun.mutate()}
         >
           {t("wizard.finish")}

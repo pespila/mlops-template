@@ -114,7 +114,9 @@ def main() -> int:
         work_dir = Path("/tmp/trainer")
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        dataset_path = io_mod.download_dataset(dataset_uri, work_dir / "dataset")
+        # Pass the directory — io_mod preserves the remote filename extension
+        # (suffix is load-bearing: parse_dataset dispatches on it).
+        dataset_path = io_mod.download_dataset(dataset_uri, work_dir)
         logger.info("dataset.downloaded", extra={"path": str(dataset_path)})
 
         df = io_mod.parse_dataset(dataset_path)

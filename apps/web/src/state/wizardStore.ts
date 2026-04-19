@@ -32,6 +32,7 @@ export interface WizardState {
   hyperparams: Record<string, unknown>;
   currentStep: WizardStep;
   experimentName: string;
+  experimentId: string | null;
 
   setDatasetId: (id: string | null) => void;
   setTransforms: (t: FeatureTransform[]) => void;
@@ -42,6 +43,7 @@ export interface WizardState {
   setHyperparams: (h: Record<string, unknown>) => void;
   setStep: (step: WizardStep) => void;
   setExperimentName: (name: string) => void;
+  setExperimentId: (id: string | null) => void;
   next: () => void;
   prev: () => void;
   reset: () => void;
@@ -60,6 +62,7 @@ const INITIAL: Omit<
   | "setHyperparams"
   | "setStep"
   | "setExperimentName"
+  | "setExperimentId"
   | "next"
   | "prev"
   | "reset"
@@ -72,6 +75,7 @@ const INITIAL: Omit<
   hyperparams: {},
   currentStep: 1,
   experimentName: "",
+  experimentId: null,
 };
 
 export const useWizardStore = create<WizardState>()(
@@ -92,6 +96,7 @@ export const useWizardStore = create<WizardState>()(
       setHyperparams: (hyperparams) => set({ hyperparams }),
       setStep: (currentStep) => set({ currentStep }),
       setExperimentName: (experimentName) => set({ experimentName }),
+      setExperimentId: (experimentId) => set({ experimentId }),
       next: () =>
         set((state) => ({
           currentStep: Math.min(5, state.currentStep + 1) as WizardStep,
