@@ -129,11 +129,12 @@ def log_run(
             try:
                 import mlflow.sklearn as mlflow_sklearn  # type: ignore[import-not-found]
 
+                # Skip input_example — MLflow's validate-serving-input path
+                # pulls in `flask`, which our slim trainer image doesn't have.
                 mlflow_sklearn.log_model(
                     sk_model=model,
                     artifact_path="model",
                     signature=signature,
-                    input_example=input_example,
                     registered_model_name=registered_model_name,
                 )
             except ImportError:
@@ -157,7 +158,6 @@ def log_run(
                     python_model=_SklearnPyFunc(),
                     artifacts={"pickle": str(pkl)},
                     signature=signature,
-                    input_example=input_example,
                     registered_model_name=registered_model_name,
                 )
         elif flavor == "autogluon":
@@ -168,7 +168,6 @@ def log_run(
                 python_model=AutoGluonPyFuncWrapper(),
                 artifacts={"predictor": str(predictor_path)},
                 signature=signature,
-                input_example=input_example,
                 registered_model_name=registered_model_name,
             )
         else:

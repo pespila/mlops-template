@@ -37,9 +37,15 @@ export function ModelsList() {
             <Link key={m.id} to={`/models/${m.id}`}>
               <GlassCard className="!p-6">
                 <h3 className="font-display text-xl font-bold text-fg1">{m.name}</h3>
-                <p className="mt-2 text-xs text-fg3">
-                  Latest version v{m.latest_version.version} ·{" "}
-                  {formatRelative(m.latest_version.created_at)}
+                {(m as { description?: string | null }).description ? (
+                  <p className="mt-2 text-sm text-fg2 line-clamp-2">
+                    {(m as { description?: string | null }).description}
+                  </p>
+                ) : null}
+                <p className="mt-3 text-xs text-fg3">
+                  {(m as { created_at?: string }).created_at
+                    ? `Registered ${formatRelative((m as { created_at: string }).created_at)}`
+                    : ""}
                 </p>
               </GlassCard>
             </Link>
