@@ -65,7 +65,8 @@ export function Login() {
               {t("auth.email")}
             </span>
             <input
-              type="email"
+              type="text"
+              inputMode="email"
               autoComplete="email"
               required
               value={email}
