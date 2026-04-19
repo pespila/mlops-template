@@ -1,0 +1,30 @@
+services:
+  api:
+    command: ["uvicorn", "aipacken.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/aipacken"]
+    volumes:
+      - ../../apps/api:/app
+    environment:
+      PLATFORM_ENV: dev
+
+  worker:
+    command: ["watchfiles", "--filter", "python", "--signal", "SIGTERM", "arq aipacken.jobs.worker.WorkerSettings", "/app/aipacken"]
+    volumes:
+      - ../../apps/api:/app
+    environment:
+      PLATFORM_ENV: dev
+
+  builder:
+    volumes:
+      - ../../apps/api:/app
+    environment:
+      PLATFORM_ENV: dev
+
+  frontend:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+      target: dev
+    command: ["pnpm", "dev", "--host", "0.0.0.0", "--port", "80"]
+    volumes:
+      - ../../apps/web:/app
+      - /app/node_modules

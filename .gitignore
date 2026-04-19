@@ -1,25 +1,54 @@
-*.pdf
-*.xls
-*.xlsx
-*.csv
-*.pdf
-*.env
-*.zip
-*.joblib
-venv/
-.venv/
-*__pycache__*
+# ---------- Python ----------
 __pycache__/
-.DS_Store
-.vscode/
-.ipynb_checkpoints/
-*.ipynb_checkpoints/*
-cdk.context.json
-.cdk.staging/
-cdk.out/
-*.egg-info
+*.py[cod]
+*$py.class
+*.egg-info/
 *.egg
-deployment/pipeline/assets/inference-imagebuild/*.py
-deployment/pipeline/assets/training-imagebuild/*.py
-deployment/pipeline/assets/processing-imagebuild/*.py
-test.py
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.joblib
+*.pkl
+
+# ---------- Node / web ----------
+node_modules/
+dist/
+build/
+.vite/
+.turbo/
+*.tsbuildinfo
+
+# ---------- IDEs ----------
+.vscode/
+.idea/
+.DS_Store
+
+# ---------- Env / secrets ----------
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ---------- Data / artifacts (local) ----------
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.pdf
+.ipynb_checkpoints/
+
+# ---------- Docker / infra ----------
+*.log
+.postgres_data/
+.minio_data/
+
+# ---------- Design ----------
+# DESIGN.zip is checked in as the source-of-truth for the AIpacken brand
+!DESIGN.zip
+
+# ---------- Generated ----------
+packages/api-client/src/schema.d.ts

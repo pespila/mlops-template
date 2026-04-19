@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   AIpacken signature component styles
+   Port of DESIGN.zip ui_kits/website/components.jsx + standalone.src.html
+   ============================================================ */
+
+@layer components {
+  .glass-card {
+    position: relative;
+    background: linear-gradient(160deg, #ffffff 0%, #f8fafa 50%, #f0f5f4 100%);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-xl);
+    box-shadow:
+      var(--shadow-md),
+      var(--shadow-glow);
+    padding: var(--space-8);
+    transition:
+      transform var(--dur) var(--ease-out),
+      box-shadow var(--dur) var(--ease-out),
+      border-color var(--dur) var(--ease-out);
+  }
+
+  .glass-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--border-strong);
+    box-shadow:
+      var(--shadow-lg),
+      var(--shadow-glow-strong);
+  }
+
+  .badge-glow {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-pill);
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--fg1);
+    box-shadow: var(--shadow-glow);
+  }
+
+  .badge-glow::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--primary);
+    animation: pulse-teal 2s ease-in-out infinite;
+  }
+
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 10px 20px;
+    background: var(--gradient-primary);
+    color: var(--fg-on-primary);
+    border-radius: var(--radius);
+    font-family: var(--font-sans);
+    font-weight: 600;
+    font-size: var(--fs-14);
+    transition:
+      filter var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out);
+  }
+
+  .btn-primary:hover {
+    filter: brightness(1.05);
+    transform: translateY(-2px);
+  }
+
+  .btn-primary:active {
+    transform: translateY(0);
+    background: var(--primary-pressed);
+  }
+
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 10px 20px;
+    background: transparent;
+    color: var(--fg1);
+    border-radius: var(--radius);
+    font-weight: 500;
+    font-size: var(--fs-14);
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+
+  .btn-ghost:hover {
+    background: var(--bg-muted);
+  }
+}
+
+*:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: var(--shadow-glow);
+  border-radius: var(--radius-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

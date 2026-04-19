@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" role="img" aria-label="AIpacken">
+  <g transform="translate(10, 0)">
+    <text x="0" y="36" font-family="&#39;Plus Jakarta Sans&#39;, sans-serif" font-weight="800" font-size="36" letter-spacing="-0.5">
+      <tspan fill="#0e9083">AI</tspan><tspan fill="#2c3e3a">packen</tspan>
+    </text>
+    <text x="0" y="56" font-family="&#39;DM Sans&#39;, sans-serif" font-weight="500" font-size="13" fill="#5a6b68" letter-spacing="0.02em">
+      Tackling AI. Shaping the future.
+    </text>
+  </g>
+</svg>

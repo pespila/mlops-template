@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" role="img" aria-label="AIpacken">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0e9083"></stop>
+      <stop offset="100%" stop-color="#1b9b8f"></stop>
+    </linearGradient>
+  </defs>
+  <g transform="translate(10, 0)">
+    <text x="0" y="36" font-family="&#39;Plus Jakarta Sans&#39;, sans-serif" font-weight="800" font-size="36" letter-spacing="-0.5">
+      <tspan fill="url(#g)">AI</tspan><tspan fill="#2c3e3a">packen</tspan>
+    </text>
+    <text x="0" y="56" font-family="&#39;DM Sans&#39;, sans-serif" font-weight="500" font-size="13" fill="#5a6b68" letter-spacing="0.02em">
+      KI anpacken. Zukunft gestalten.
+    </text>
+  </g>
+</svg>

@@ -1,43 +1,63 @@
-# Compressor Optimization
+# AIpacken — Self-Hosted AI Platform
 
-## Setup
+A local, Docker-based AI platform. Upload a dataset, pick a model (including AutoGluon, zero-config), train, inspect metrics / SHAP / bias, and deploy to a live API — all from a single web UI, running entirely on your machine.
 
-Once you cloned the repository create a virtual environment using
+> Origin: this repo started as the AWS-SageMaker [MLOps template](https://aws.amazon.com/blogs/machine-learning/deploy-an-mlops-solution-that-hosts-your-model-endpoints-in-aws-lambda/). It has been ported to a self-hosted architecture — SageMaker, Lambda, CodePipeline, and CDK are all gone.
 
-```
-python3 -m venv .venv
-```
+## Stack
 
-Activate the environment:
+- **Backend**: FastAPI + Arq (async worker) + SQLAlchemy + Alembic + Postgres 16
+- **Object store**: MinIO (S3-compatible)
+- **Experiment tracking / model registry**: MLflow
+- **Reverse proxy**: Traefik v3 (dynamic routing to per-model serving containers)
+- **Frontend**: Vite + React 18 + TypeScript + Tailwind CSS (wired to AIpacken design tokens)
+- **Infra**: Docker Compose (v0). Kubernetes-ready topology (v2).
 
-```
-source .venv/bin/activate
-```
+## Quick start
 
-Next install the required libraries using:
+```bash
+cp .env.example .env
+# edit .env — set PLATFORM_SECRET_KEY and PLATFORM_ADMIN_PASSWORD
 
-```
-pip install -r requirements.txt
-```
-
-Finally, initialize pre-commit using
-
-```
-pre-commit install
-```
-
-You can use the `experiments` folder to start your journey with Jupyter notebooks and the regular data science cycle. Once you have developed your code, model, etc. you can integrate it into the files located in `mllib`. These files will be copied into the main application and leveraged by the entire automation mechanism.
-
-The most important files in `mllib` are:
-
-* **preprocess.py**: This is the entry point for the Amazon SageMaker processing job and leverages the Docker container built and pushed to Amazon ECR.
-* **train.py**: This is the entry point for the Amazon SageMaker training job and leverages the Docker container built and pushed to Amazon ECR.
-* **serve.py**: This is the entry point for the Amazon SageMaker endpoint and leverages the Docker container built and pushed to Amazon ECR. (Note: This project deploys the models in an AWS Lambda function, i.e. this file won't be used but can be if hosting is done in Amazon SageMaker)
-
-In order to deploy your solution navigate into `deployment` folder and run
-
-```
-bash deploy.sh
+make dev          # brings up the full stack with hot reload
+# → http://localhost           (frontend)
+# → http://localhost/api/healthz   (api health)
+# → http://localhost/mlflow    (mlflow ui)
 ```
 
-you'll find a separate README that will give you guidance.
+Stop with `make down`. Wipe volumes with `make clean`.
+
+## Repo layout
+
+```
+apps/
+  api/             FastAPI + Arq worker (same image, different entrypoints)
+  web/             Vite + React SPA
+packages/
+  api-spec/        committed openapi.json (drift-checked in CI)
+  api-client/      generated TS types
+infra/
+  compose/         docker-compose.yml (base + dev + obs overlays)
+  templates/       Jinja2 Dockerfiles for per-run trainer / serving images
+  traefik/         static + dynamic proxy config
+  postgres/        init.sql
+trainer_base/      platform/trainer-base image — generic training entrypoint
+serving_base/      platform/serving-base image — generic FastAPI serving app
+scripts/           bootstrap.sh, build_bases.sh
+```
+
+## Design system
+
+The frontend follows the **AIpacken** design system, shipped in `DESIGN.zip` and extracted into `apps/web/src/styles/` + `apps/web/public/`. Teal-on-white, Plus Jakarta Sans + Inter + Lora, glass-card surfaces with a subtle teal glow. Voice: calm competence, no marketing gloss, CTAs end with `→`.
+
+## Status
+
+**v0 (in progress)** — lean MVP end-to-end: upload → profile → built-in models (sklearn logistic, sklearn gradient boosting, AutoGluon) → train → SHAP + fairlearn bias → deploy → realtime API.
+
+**v1 (next)** — custom PyPi packages (pinned allowlist), batch prediction, run comparison, prediction browser.
+
+**v2 (later)** — Kubernetes topology, OIDC/SSO, per-user quotas.
+
+## License
+
+See `LICENSE`.
