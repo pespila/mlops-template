@@ -29,10 +29,36 @@ from aipacken.scripts.seed_catalog import seed_catalog
 logger = structlog.get_logger(__name__)
 
 
+def _run_migrations() -> None:
+    """Run Alembic migrations synchronously on startup.
+
+    The app lifecycle is authoritative here — we don't want operators to
+    remember a separate `alembic upgrade head` step.
+    """
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+
+    app_root = Path(__file__).resolve().parent.parent
+    cfg = Config(str(app_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(app_root / "migrations"))
+    cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
+    command.upgrade(cfg, "head")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    import asyncio
+
     settings = get_settings()
     logger.info("api.startup", env=settings.platform_env)
+
+    try:
+        await asyncio.to_thread(_run_migrations)
+        logger.info("api.startup.migrations_ok")
+    except Exception as exc:  # noqa: BLE001 — log + continue so /healthz stays reachable
+        logger.error("api.startup.migrations_failed", error=str(exc))
 
     try:
         from aipacken.services.minio_client import ensure_buckets
