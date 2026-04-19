@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends
@@ -14,7 +15,43 @@ from aipacken.services.redis_client import get_redis
 router = APIRouter(tags=["sse"])
 
 
-async def _subscribe(channel: str) -> AsyncIterator[str]:
+def _shape_log(raw: Any) -> dict[str, Any]:
+    """Normalize a raw redis payload into a {ts, level, message} log record."""
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    return {
+                        "ts": str(parsed.get("ts") or datetime.now(timezone.utc).isoformat()),
+                        "level": str(parsed.get("level") or "info"),
+                        "message": str(parsed.get("message") or parsed.get("msg") or stripped),
+                    }
+            except json.JSONDecodeError:
+                pass
+        level = "error" if "ERROR" in raw.upper() else ("warn" if "WARN" in raw.upper() else "info")
+        return {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "level": level,
+            "message": raw,
+        }
+    if isinstance(raw, dict):
+        return {
+            "ts": str(raw.get("ts") or datetime.now(timezone.utc).isoformat()),
+            "level": str(raw.get("level") or "info"),
+            "message": str(raw.get("message") or raw.get("msg") or json.dumps(raw)),
+        }
+    return {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "level": "info",
+        "message": str(raw),
+    }
+
+
+async def _subscribe(channel: str, event_name: str = "log") -> AsyncIterator[str]:
     r = get_redis()
     pubsub = r.pubsub()
     await pubsub.subscribe(channel)
@@ -25,20 +62,17 @@ async def _subscribe(channel: str) -> AsyncIterator[str]:
             if msg is None:
                 yield ": keepalive\n\n"
                 continue
-            data = msg.get("data")
-            if isinstance(data, (bytes, bytearray)):
-                data = data.decode("utf-8", errors="replace")
-            if isinstance(data, (dict, list)):
-                data = json.dumps(data)
-            yield f"data: {data}\n\n"
+            record = _shape_log(msg.get("data"))
+            payload = json.dumps(record, default=str)
+            yield f"event: {event_name}\ndata: {payload}\n\n"
     finally:
         await pubsub.unsubscribe(channel)
         await pubsub.close()
 
 
-def _stream(channel: str) -> StreamingResponse:
+def _stream(channel: str, event_name: str = "log") -> StreamingResponse:
     async def gen() -> AsyncIterator[bytes]:
-        async for line in _subscribe(channel):
+        async for line in _subscribe(channel, event_name):
             yield line.encode("utf-8")
             await asyncio.sleep(0)
 
@@ -56,7 +90,7 @@ async def stream_run_logs(run_id: str, user: User = Depends(get_current_user)) -
 
 @router.get("/runs/{run_id}/metrics")
 async def stream_run_metrics(run_id: str, user: User = Depends(get_current_user)) -> StreamingResponse:
-    return _stream(f"run:{run_id}:metrics")
+    return _stream(f"run:{run_id}:metrics", event_name="metric")
 
 
 @router.get("/deployments/{deployment_id}/events")
