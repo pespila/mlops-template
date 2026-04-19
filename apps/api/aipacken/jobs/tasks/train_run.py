@@ -94,7 +94,9 @@ async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                 env=env,
                 memory_bytes=memory_gb * 1024 * 1024 * 1024,
                 nano_cpus=cpus * 1_000_000_000,
-                network=f"train-net-{run.id}",
+                # v0: share platform-net so the trainer can reach MinIO + MLflow.
+                # v1: spin up an ephemeral train-net-{run.id} with a proxy to only those two.
+                network="platform-net",
                 labels={"platform.run_id": run.id},
             )
         except Exception as exc:
