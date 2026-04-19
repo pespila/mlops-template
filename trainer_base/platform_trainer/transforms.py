@@ -98,7 +98,8 @@ def build_column_transformer(
 
     transformers = [(name, step, cols) for name, (step, cols) in grouped.items()]
     if remainder_cols:
-        transformers.append(("__passthrough__", "passthrough", remainder_cols))
+        # sklearn 1.5 rejects `__` in step names — use a plain identifier.
+        transformers.append(("passthrough_remainder", "passthrough", remainder_cols))
 
     if not transformers:
         raise ValueError("transform config produced no active columns")
