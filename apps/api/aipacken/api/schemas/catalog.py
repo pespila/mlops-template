@@ -17,8 +17,10 @@ class ModelCatalogEntryRead(BaseModel):
     origin: str
     image_uri: str | None = None
 
-    # Frontend-facing aliases
-    family: str = Field(default="", validation_alias="kind")
+    # Frontend-facing aliases.
+    # `family` groups + filters the catalog — use `name` (e.g. `sklearn_logistic`,
+    # `autogluon`), not `kind` (task type like `classification`).
+    family: str = Field(default="", validation_alias="name")
     hyperparam_schema: dict[str, Any] = Field(
         default_factory=dict, validation_alias="signature_json"
     )
