@@ -15,12 +15,13 @@ export function DatasetDetail() {
     queryKey: ["datasets", id],
     queryFn: () => api.datasets.get(id),
     enabled: Boolean(id),
+    refetchInterval: (q) => (q.state.data?.status === "ready" ? false : 1500),
   });
 
   const schema = useQuery({
     queryKey: ["datasets", id, "schema"],
     queryFn: () => api.datasets.schema(id),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && dataset.data?.status === "ready",
   });
 
   return (
