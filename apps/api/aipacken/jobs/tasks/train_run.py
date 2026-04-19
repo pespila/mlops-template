@@ -73,7 +73,10 @@ async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             "MLFLOW_EXPERIMENT_ID": exp_id or "",
             "MODEL_CATALOG": json.dumps(
                 {
-                    "kind": entry.kind,
+                    # Trainer adapters key off `kind` — pass the model identifier
+                    # (`sklearn_logistic`, `autogluon`, ...), not the ML task.
+                    "kind": entry.name,
+                    "task": entry.kind,
                     "name": entry.name,
                     "framework": entry.framework,
                     "signature": entry.signature_json,
