@@ -35,12 +35,21 @@ help:
 	@echo "  make build-bases  - Build trainer_base and serving_base images"
 	@echo "  make config       - Validate docker compose config"
 
+.env:
+	@echo "[bootstrap] creating .env from .env.example"
+	@cp .env.example .env
+	@SECRET=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))'); \
+	  sed -i.bak "s|PLATFORM_SECRET_KEY=.*|PLATFORM_SECRET_KEY=$$SECRET|" .env && rm .env.bak
+	@TOKEN=$$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))'); \
+	  sed -i.bak "s|INTERNAL_HMAC_TOKEN=.*|INTERNAL_HMAC_TOKEN=$$TOKEN|" .env && rm .env.bak
+	@echo "[bootstrap] .env created. Review and edit PLATFORM_ADMIN_PASSWORD before exposing."
+
 .PHONY: dev
-dev:
+dev: .env
 	$(COMPOSE_DEV_CMD) up --build
 
 .PHONY: up
-up:
+up: .env
 	$(COMPOSE) up -d --build
 
 .PHONY: down
@@ -56,7 +65,7 @@ logs:
 	$(COMPOSE) logs -f
 
 .PHONY: config
-config:
+config: .env
 	$(COMPOSE) config --quiet && echo "docker compose config OK"
 
 .PHONY: seed
