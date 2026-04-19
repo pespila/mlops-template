@@ -239,6 +239,34 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                     )
                 )
 
+                # Mirror every MLflow artifact (shap png, bias png, schema
+                # json, leaderboard, etc.) into our Artifact table so
+                # RunDetail lists them without hitting MLflow.
+                try:
+                    for art in mc.list_artifacts(mlflow_run_id):
+                        if art.path == "model":
+                            continue
+                        lname = art.path.lower()
+                        kind = "file"
+                        if "shap" in lname:
+                            kind = "shap"
+                        elif "bias" in lname:
+                            kind = "bias"
+                        elif lname.endswith("input_schema.json"):
+                            kind = "schema"
+                        elif lname.endswith("leaderboard.json"):
+                            kind = "leaderboard"
+                        db.add(
+                            Artifact(
+                                run_id=run_id,
+                                kind=kind,
+                                uri=f"{artifact_uri}/{art.path}",
+                                size_bytes=int(art.file_size) if art.file_size else None,
+                            )
+                        )
+                except Exception as exc:
+                    logger.warning("train_run.list_artifacts_failed", error=str(exc))
+
                 # Register a platform-side ModelVersion so the Deploy button appears.
                 model_name = f"{entry.name}-run-{run_id[:8]}"
                 reg = RegisteredModel(name=model_name, description=entry.description)
