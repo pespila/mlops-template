@@ -1,8 +1,22 @@
 COMPOSE_BASE := infra/compose/docker-compose.yml
 COMPOSE_DEV  := infra/compose/docker-compose.dev.yml
 ENV_FILE     := .env
-COMPOSE      := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_BASE)
-COMPOSE_DEV_CMD := docker compose --env-file $(ENV_FILE) -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
+
+# Resolve a `docker` binary even if Docker Desktop's CLI wasn't symlinked into PATH.
+DOCKER := $(shell \
+  command -v docker 2>/dev/null \
+  || ( [ -x /Applications/Docker.app/Contents/Resources/bin/docker ] \
+       && echo /Applications/Docker.app/Contents/Resources/bin/docker ) \
+  || ( [ -x /usr/local/bin/docker ] && echo /usr/local/bin/docker ) \
+  || ( [ -x $(HOME)/.docker/bin/docker ] && echo $(HOME)/.docker/bin/docker ) \
+)
+
+ifeq ($(DOCKER),)
+  $(error docker not found; install Docker Desktop or add it to your PATH)
+endif
+
+COMPOSE      := $(DOCKER) compose --env-file $(ENV_FILE) -f $(COMPOSE_BASE)
+COMPOSE_DEV_CMD := $(DOCKER) compose --env-file $(ENV_FILE) -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 
 .PHONY: help
 help:
