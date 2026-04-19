@@ -290,7 +290,8 @@ export const api = {
   },
 
   datasets: {
-    list: () => apiFetch<DatasetRead[]>("/datasets"),
+    list: () =>
+      apiFetch<{ items: DatasetRead[] }>("/datasets").then((r) => r.items ?? []),
     get: (id: string) => apiFetch<DatasetRead>(`/datasets/${encodeURIComponent(id)}`),
     profile: (id: string) =>
       apiFetch<DatasetProfile>(`/datasets/${encodeURIComponent(id)}/profile`),
@@ -327,17 +328,25 @@ export const api = {
   },
 
   catalog: {
-    models: () => apiFetch<ModelCatalogEntry[]>("/catalog/models"),
+    models: () =>
+      apiFetch<{ items: ModelCatalogEntry[] } | ModelCatalogEntry[]>("/catalog/models").then(
+        (r) => (Array.isArray(r) ? r : (r.items ?? [])),
+      ),
   },
 
   experiments: {
-    list: () => apiFetch<ExperimentRead[]>("/experiments"),
+    list: () =>
+      apiFetch<{ items: ExperimentRead[] }>("/experiments").then((r) => r.items ?? []),
     get: (id: string) => apiFetch<ExperimentRead>(`/experiments/${encodeURIComponent(id)}`),
     create: (input: CreateExperimentInput) =>
       apiFetch<ExperimentRead>("/experiments", { method: "POST", body: input }),
   },
 
   runs: {
+    list: (experimentId?: string) =>
+      apiFetch<{ items: RunRead[] }>(
+        experimentId ? `/runs?experiment_id=${encodeURIComponent(experimentId)}` : "/runs",
+      ).then((r) => r.items ?? []),
     create: (input: CreateRunInput) =>
       apiFetch<RunRead>("/runs", { method: "POST", body: input }),
     get: (id: string) => apiFetch<RunRead>(`/runs/${encodeURIComponent(id)}`),
@@ -347,9 +356,10 @@ export const api = {
   },
 
   models: {
-    list: () => apiFetch<Array<{ id: string; name: string; latest_version: ModelVersionRead }>>(
-      "/models",
-    ),
+    list: () =>
+      apiFetch<{ items: Array<{ id: string; name: string; latest_version: ModelVersionRead }> }>(
+        "/models",
+      ).then((r) => r.items ?? []),
     get: (id: string) =>
       apiFetch<{ id: string; name: string; versions: ModelVersionRead[] }>(
         `/models/${encodeURIComponent(id)}`,
@@ -357,7 +367,8 @@ export const api = {
   },
 
   deployments: {
-    list: () => apiFetch<DeploymentRead[]>("/deployments"),
+    list: () =>
+      apiFetch<{ items: DeploymentRead[] }>("/deployments").then((r) => r.items ?? []),
     get: (id: string) => apiFetch<DeploymentRead>(`/deployments/${encodeURIComponent(id)}`),
     create: (input: CreateDeploymentInput) =>
       apiFetch<DeploymentRead>("/deployments", { method: "POST", body: input }),
