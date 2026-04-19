@@ -15,6 +15,12 @@ ifeq ($(DOCKER),)
   $(error docker not found; install Docker Desktop or add it to your PATH)
 endif
 
+# Docker Desktop ships credential helpers (docker-credential-desktop) and
+# buildx / compose plugins next to the `docker` binary. Prepend that directory
+# to PATH so `docker compose pull` can find them.
+DOCKER_BIN_DIR := $(dir $(DOCKER))
+export PATH := $(DOCKER_BIN_DIR):$(PATH)
+
 COMPOSE      := $(DOCKER) compose --env-file $(ENV_FILE) -f $(COMPOSE_BASE)
 COMPOSE_DEV_CMD := $(DOCKER) compose --env-file $(ENV_FILE) -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 
