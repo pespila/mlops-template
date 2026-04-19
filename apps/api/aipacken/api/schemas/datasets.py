@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DatasetCreate(BaseModel):
@@ -24,7 +24,7 @@ class FeatureSchemaRead(BaseModel):
 
 
 class DatasetRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
     user_id: str
@@ -32,6 +32,9 @@ class DatasetRead(BaseModel):
     source_filename: str | None = None
     row_count: int | None = None
     col_count: int | None = None
+    # Frontend-facing alias
+    column_count: int | None = Field(default=None, validation_alias="col_count")
+    size_bytes: int | None = None
     storage_uri: str
     checksum: str | None = None
     status: str

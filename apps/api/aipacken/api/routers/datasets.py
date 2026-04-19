@@ -25,14 +25,14 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 @router.post("", response_model=DatasetRead, status_code=201)
 async def create_dataset(
-    name: str = Form(...),
     file: UploadFile = File(...),
+    name: str | None = Form(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dataset:
     settings = get_settings()
     dataset_id = str(uuid.uuid4())
-    key = f"{dataset_id}/raw/{file.filename}"
+    key = f"{dataset_id}/raw/{file.filename or dataset_id}"
 
     h = hashlib.sha256()
     body = await file.read()
@@ -46,10 +46,12 @@ async def create_dataset(
         content_type=file.content_type,
     )
 
+    display_name = name or (file.filename or dataset_id).rsplit(".", 1)[0]
+
     dataset = Dataset(
         id=dataset_id,
         user_id=user.id,
-        name=name,
+        name=display_name,
         source_filename=file.filename,
         storage_uri=f"s3://{settings.s3_bucket_datasets}/{key}",
         checksum=h.hexdigest(),
