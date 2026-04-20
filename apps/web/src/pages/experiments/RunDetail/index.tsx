@@ -12,7 +12,7 @@ import { BiasGroupTable } from "@/components/organisms/BiasGroupTable";
 import { RunMetricsChart } from "@/components/organisms/RunMetricsChart";
 import { SHAPGlobalBars } from "@/components/organisms/SHAPGlobalBars";
 import { TrainingLogStream } from "@/components/organisms/TrainingLogStream";
-import { api } from "@/lib/api/client";
+import { api, errorMessage } from "@/lib/api/client";
 import { formatNumber, formatRelative } from "@/lib/format";
 
 export function RunDetail() {
@@ -150,6 +150,9 @@ export function RunDetail() {
             deleting={remove.isPending}
           />
         </div>
+        {remove.isError ? (
+          <p className="max-w-xl text-sm text-danger">{errorMessage(remove.error)}</p>
+        ) : null}
         <div className="flex flex-wrap items-center gap-2 text-xs text-fg2">
           {run.data ? (
             <>

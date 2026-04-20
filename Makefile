@@ -111,3 +111,5 @@ build-bases:
 	$(DOCKER) build -f trainer_base/Dockerfile.autogluon -t platform/trainer-base-autogluon:latest trainer_base/
 	@echo "[build-bases] building platform/serving-base:latest"
 	$(DOCKER) build -t platform/serving-base:latest serving_base/
+	@echo "[build-bases] building platform/serving-base-autogluon:latest (large ~3GB)"
+	$(DOCKER) build -f serving_base/Dockerfile.autogluon -t platform/serving-base-autogluon:latest serving_base/

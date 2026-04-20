@@ -208,6 +208,15 @@ def main() -> int:
         flavor: str
 
         if kind == "autogluon":
+            # AutoGluon has no sklearn preprocessor in front of it, so we honor
+            # the user's column selection by hand: kept_cols comes from
+            # build_column_transformer, which already accounts for explicit
+            # drops (op=="drop") and implicit drops (text columns).
+            feature_cols = [c for c in kept_cols if c in X_train.columns]
+            if not feature_cols:
+                raise ValueError("no feature columns selected for training")
+            X_train = X_train[feature_cols]
+            X_val = X_val[feature_cols]
             train_df = X_train.copy()
             train_df[target] = y_train.values
             val_df = X_val.copy()
@@ -224,7 +233,7 @@ def main() -> int:
                 output_dir=predictor_path,
             )
             flavor = "autogluon"
-            feature_names = list(X_train.columns)
+            feature_names = feature_cols
             X_post_sample = X_val
             y_pred = model.predict(X_val)
         else:

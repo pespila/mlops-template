@@ -33,7 +33,14 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
         await db.commit()
         await publish(f"deployment:{deployment_id}:events", {"status": "deploying"})
 
-        image = mv.serving_image_uri or settings.serving_base_image
+        # AutoGluon ships its own serving image because its pinned sklearn /
+        # numpy / pandas don't match the base serving pyproject; route by kind.
+        if mv.serving_image_uri:
+            image = mv.serving_image_uri
+        elif (mv.model_kind or "").lower() == "autogluon":
+            image = settings.serving_base_autogluon_image
+        else:
+            image = settings.serving_base_image
         env = {
             "MODEL_STORAGE_PATH": mv.storage_path,
             "MODEL_KIND": mv.model_kind,

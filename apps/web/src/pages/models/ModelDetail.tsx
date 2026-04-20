@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { EditableHeading } from "@/components/molecules/EditableHeading";
 import { GlassCard } from "@/components/molecules/GlassCard";
-import { api } from "@/lib/api/client";
+import { api, errorMessage } from "@/lib/api/client";
 import { formatNumber, formatRelative } from "@/lib/format";
 
 export function ModelDetail() {
   const { id = "" } = useParams<{ id: string }>();
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const model = useQuery({
     queryKey: ["models", id],
@@ -24,16 +25,30 @@ export function ModelDetail() {
     },
   });
 
+  const remove = useMutation({
+    mutationFn: () => api.models.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["models"] });
+      navigate("/models");
+    },
+  });
+
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <header className="flex flex-col gap-2">
         <EditableHeading
           value={model.data?.name ?? "Model"}
           onSave={(next) => rename.mutateAsync(next)}
+          onDelete={() => remove.mutateAsync()}
+          deleteConfirm="Delete this model and every version under it? This cannot be undone."
           saving={rename.isPending}
+          deleting={remove.isPending}
         />
         {model.data?.description ? (
           <p className="max-w-xl text-sm text-fg2">{model.data.description}</p>
+        ) : null}
+        {remove.isError ? (
+          <p className="max-w-xl text-sm text-danger">{errorMessage(remove.error)}</p>
         ) : null}
       </header>
 

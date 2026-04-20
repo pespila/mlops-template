@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import shutil
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from aipacken import storage
 from aipacken.api.schemas.models import (
     ModelUpdate,
     ModelVersionRead,
@@ -15,6 +18,7 @@ from aipacken.api.schemas.models import (
 from aipacken.db import get_db
 from aipacken.db.models import (
     Dataset,
+    Deployment,
     Metric,
     ModelCatalogEntry,
     ModelVersion,
@@ -107,6 +111,62 @@ async def update_model(
     await db.commit()
     await db.refresh(rm)
     return rm
+
+
+@router.delete("/{model_id}", status_code=204, response_class=Response)
+async def delete_model(
+    model_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Delete a registered model and every version under it.
+
+    Fails with 409 if any version is still referenced by a Deployment — the
+    caller must tear those down first. On success the on-disk version
+    directories are removed alongside the DB rows.
+    """
+    rm = await db.get(RegisteredModel, model_id)
+    if rm is None:
+        raise HTTPException(status_code=404, detail="model_not_found")
+
+    blockers = (
+        await db.execute(
+            select(Deployment.id, Deployment.name, Deployment.slug, Deployment.status)
+            .join(ModelVersion, Deployment.model_version_id == ModelVersion.id)
+            .where(ModelVersion.registered_model_id == model_id)
+        )
+    ).all()
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "deployments_exist",
+                "message": (
+                    f"{len(blockers)} deployment(s) still reference versions of this "
+                    "model. Delete the deployments first."
+                ),
+                "deployments": [
+                    {"id": b.id, "name": b.name, "slug": b.slug, "status": b.status}
+                    for b in blockers
+                ],
+            },
+        )
+
+    version_ids = (
+        await db.execute(
+            select(ModelVersion.id).where(ModelVersion.registered_model_id == model_id)
+        )
+    ).scalars().all()
+    for mv_id in version_ids:
+        mv_dir = storage.model_version_dir(mv_id)
+        if mv_dir.exists():
+            shutil.rmtree(mv_dir, ignore_errors=True)
+
+    # RegisteredModel.versions has cascade="all, delete-orphan" so deleting
+    # the parent removes the ModelVersion rows in one shot.
+    await db.delete(rm)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{model_id}/versions", response_model=list[ModelVersionRead])

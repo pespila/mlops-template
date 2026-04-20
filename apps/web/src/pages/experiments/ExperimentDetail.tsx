@@ -6,7 +6,7 @@ import { Button } from "@/components/atoms/Button";
 import { RunStatusBadge } from "@/components/atoms/RunStatusBadge";
 import { EditableHeading } from "@/components/molecules/EditableHeading";
 import { GlassCard } from "@/components/molecules/GlassCard";
-import { api } from "@/lib/api/client";
+import { api, errorMessage } from "@/lib/api/client";
 import { formatRelative } from "@/lib/format";
 
 export function ExperimentDetail() {
@@ -66,6 +66,12 @@ export function ExperimentDetail() {
           <p className="mt-2 max-w-xl text-fg2">
             {experiment.data?.description ?? "A grouping of training runs."}
           </p>
+          {remove.isError ? (
+            <p className="mt-2 max-w-xl text-sm text-danger">{errorMessage(remove.error)}</p>
+          ) : null}
+          {deleteRun.isError ? (
+            <p className="mt-2 max-w-xl text-sm text-danger">{errorMessage(deleteRun.error)}</p>
+          ) : null}
         </div>
         <Button
           asChild

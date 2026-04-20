@@ -17,8 +17,10 @@ from aipacken.db import get_db
 from aipacken.db.models import (
     Artifact,
     BiasReport,
+    Deployment,
     ExplanationArtifact,
     Metric,
+    ModelVersion,
     Run,
     TransformConfig,
     User,
@@ -253,6 +255,31 @@ async def delete_run(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     from aipacken.jobs.tasks.train_run import cascade_delete_run_assets
+
+    # Block the delete if any model version produced by this run is still
+    # referenced by a Deployment. User must remove the deployments first.
+    blockers = (
+        await db.execute(
+            select(Deployment.id, Deployment.name, Deployment.slug, Deployment.status)
+            .join(ModelVersion, Deployment.model_version_id == ModelVersion.id)
+            .where(ModelVersion.run_id == run_id)
+        )
+    ).all()
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "deployments_exist",
+                "message": (
+                    f"{len(blockers)} deployment(s) still reference models from this "
+                    "run. Delete the deployments first."
+                ),
+                "deployments": [
+                    {"id": b.id, "name": b.name, "slug": b.slug, "status": b.status}
+                    for b in blockers
+                ],
+            },
+        )
 
     await cascade_delete_run_assets(db, run_id)
     await db.commit()

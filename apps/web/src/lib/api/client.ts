@@ -24,6 +24,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Extract a human-readable message from an unknown error value. Knows how to
+ * dig into the FastAPI {detail: {...}} shape our 409 responses use, and falls
+ * back to the generic Error message otherwise.
+ */
+export function errorMessage(err: unknown, fallback = "Something went wrong."): string {
+  if (err instanceof ApiError) {
+    const body = err.body as { detail?: unknown } | null | undefined;
+    const detail = body?.detail;
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object") {
+      const msg = (detail as { message?: unknown }).message;
+      if (typeof msg === "string" && msg.length > 0) return msg;
+    }
+    return err.message;
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
 async function parseBody(res: Response): Promise<unknown> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -427,6 +447,8 @@ export const api = {
         `/models/${encodeURIComponent(id)}`,
         { method: "PATCH", body: input },
       ),
+    remove: (id: string) =>
+      apiFetch<void>(`/models/${encodeURIComponent(id)}`, { method: "DELETE" }),
   },
 
   deployments: {

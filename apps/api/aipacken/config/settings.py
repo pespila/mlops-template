@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     trainer_base_image: str = "platform/trainer-base:latest"
     serving_base_image: str = "platform/serving-base:latest"
+    serving_base_autogluon_image: str = "platform/serving-base-autogluon:latest"
     models_network: str = "models-net"
 
     prediction_retention_days: int = 90

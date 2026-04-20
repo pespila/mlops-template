@@ -11,7 +11,7 @@ from aipacken.api.schemas.experiments import (
     ExperimentUpdate,
 )
 from aipacken.db import get_db
-from aipacken.db.models import Experiment, Run, User
+from aipacken.db.models import Deployment, Experiment, ModelVersion, Run, User
 from aipacken.jobs.tasks.train_run import cascade_delete_run_assets
 from aipacken.services.auth import get_current_user
 
@@ -85,6 +85,32 @@ async def delete_experiment(
     exp = await db.get(Experiment, experiment_id)
     if exp is None:
         raise HTTPException(status_code=404, detail="experiment_not_found")
+
+    # Refuse the delete if any model version produced by a run in this
+    # experiment still has a Deployment — user must remove those first.
+    blockers = (
+        await db.execute(
+            select(Deployment.id, Deployment.name, Deployment.slug, Deployment.status)
+            .join(ModelVersion, Deployment.model_version_id == ModelVersion.id)
+            .join(Run, ModelVersion.run_id == Run.id)
+            .where(Run.experiment_id == experiment_id)
+        )
+    ).all()
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "deployments_exist",
+                "message": (
+                    f"{len(blockers)} deployment(s) still reference models from this "
+                    "experiment. Delete the deployments first."
+                ),
+                "deployments": [
+                    {"id": b.id, "name": b.name, "slug": b.slug, "status": b.status}
+                    for b in blockers
+                ],
+            },
+        )
 
     # Cascade-delete every run (and its on-disk artifacts + model versions).
     run_ids = (
