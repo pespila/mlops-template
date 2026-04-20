@@ -15,6 +15,11 @@ class DeploymentCreate(BaseModel):
     audit_payloads: bool = False
 
 
+class DeploymentUpdate(BaseModel):
+    name: str | None = None
+    audit_payloads: bool | None = None
+
+
 class DeploymentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 

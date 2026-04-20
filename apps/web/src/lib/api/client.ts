@@ -426,6 +426,11 @@ export const api = {
     get: (id: string) => apiFetch<DeploymentRead>(`/deployments/${encodeURIComponent(id)}`),
     create: (input: CreateDeploymentInput) =>
       apiFetch<DeploymentRead>("/deployments", { method: "POST", body: input }),
+    update: (id: string, input: { name?: string; audit_payloads?: boolean }) =>
+      apiFetch<DeploymentRead>(`/deployments/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: input,
+      }),
     remove: (id: string) =>
       apiFetch<void>(`/deployments/${encodeURIComponent(id)}`, { method: "DELETE" }),
     schema: (id: string) =>

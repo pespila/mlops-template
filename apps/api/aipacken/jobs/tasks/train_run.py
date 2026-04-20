@@ -433,13 +433,24 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                 db2.add(reg)
                 await db2.flush()
 
+                # Pick up the input_schema.json the trainer wrote so serving
+                # containers + the deployment UI can load it without a live
+                # probe.
+                input_schema: dict[str, Any] = {}
+                schema_file = storage.run_artifacts_dir(run_id) / "input_schema.json"
+                if schema_file.exists():
+                    try:
+                        input_schema = json.loads(schema_file.read_text())
+                    except Exception as exc:
+                        logger.info("train_run.schema_read_failed", error=str(exc))
+
                 mv = ModelVersion(
                     registered_model_id=reg.id,
                     run_id=run_id,
                     version=1,
                     stage="staging",
                     model_kind=model_kind,
-                    input_schema_json={},
+                    input_schema_json=input_schema,
                     output_schema_json={},
                 )
                 db2.add(mv)

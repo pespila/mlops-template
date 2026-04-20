@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { RunStatusBadge, type RunStatus } from "@/components/atoms/RunStatusBadge";
+import { EditableHeading } from "@/components/molecules/EditableHeading";
 import { GlassCard } from "@/components/molecules/GlassCard";
 import { useT } from "@/i18n";
 import { api, type DeploymentRead } from "@/lib/api/client";
@@ -34,6 +35,8 @@ function mapStatus(status: DeploymentRead["status"]): RunStatus {
 export function DeploymentDetail() {
   const { id = "" } = useParams<{ id: string }>();
   const t = useT();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("overview");
 
   const deployment = useQuery({
@@ -41,6 +44,22 @@ export function DeploymentDetail() {
     queryFn: () => api.deployments.get(id),
     enabled: Boolean(id),
     refetchInterval: 10_000,
+  });
+
+  const rename = useMutation({
+    mutationFn: (name: string) => api.deployments.update(id, { name }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["deployments", id] });
+      qc.invalidateQueries({ queryKey: ["deployments"] });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.deployments.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["deployments"] });
+      navigate("/deployments");
+    },
   });
 
   const tabs: Array<{ key: Tab; label: string }> = [
@@ -57,9 +76,15 @@ export function DeploymentDetail() {
           {deployment.data ? (
             <RunStatusBadge status={mapStatus(deployment.data.status)} />
           ) : null}
-          <h1 className="font-display text-display-lg font-extrabold tracking-tight text-fg1">
-            {deployment.data?.name ?? "Deployment"}
-          </h1>
+          <EditableHeading
+            className="flex-1"
+            value={deployment.data?.name ?? "Deployment"}
+            onSave={(next) => rename.mutateAsync(next)}
+            onDelete={() => remove.mutateAsync()}
+            deleteConfirm="Delete this deployment? The serving container will be stopped immediately."
+            saving={rename.isPending}
+            deleting={remove.isPending}
+          />
         </div>
       </header>
 

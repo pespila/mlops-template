@@ -5,19 +5,21 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aipacken import storage
 from aipacken.api.schemas.deployments import (
     DeploymentCreate,
     DeploymentList,
     DeploymentRead,
+    DeploymentUpdate,
     PredictRequest,
     PredictResponse,
 )
 from aipacken.db import get_db
-from aipacken.db.models import Deployment, User
+from aipacken.db.models import Deployment, ModelVersion, Run, User
 from aipacken.jobs.queue import enqueue
 from aipacken.services.auth import get_current_user
 
@@ -75,19 +77,98 @@ async def get_deployment(
     return dep
 
 
-@router.delete("/{deployment_id}", status_code=202)
+@router.patch("/{deployment_id}", response_model=DeploymentRead)
+async def update_deployment(
+    deployment_id: str,
+    payload: DeploymentUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Deployment:
+    dep = await db.get(Deployment, deployment_id)
+    if dep is None:
+        raise HTTPException(status_code=404, detail="deployment_not_found")
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name_must_not_be_empty")
+        dep.name = name
+    if payload.audit_payloads is not None:
+        dep.audit_payloads = payload.audit_payloads
+    await db.commit()
+    await db.refresh(dep)
+    return dep
+
+
+@router.delete("/{deployment_id}", status_code=204, response_class=Response)
 async def delete_deployment(
     deployment_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> Response:
+    """Stop the serving container (best-effort) and remove the row."""
     dep = await db.get(Deployment, deployment_id)
     if dep is None:
         raise HTTPException(status_code=404, detail="deployment_not_found")
-    dep.status = "tearing_down"
+
+    if dep.container_id:
+        from aipacken.docker_client.builder_client import get_builder_client
+
+        try:
+            await get_builder_client().stop(dep.container_id, timeout=10)
+        except Exception:
+            # Stale container may already be gone; don't block the delete on it.
+            pass
+
+    await db.delete(dep)
     await db.commit()
-    await enqueue("teardown_deployment", deployment_id)
-    return {"status": "tearing_down", "deployment_id": deployment_id}
+    return Response(status_code=204)
+
+
+@router.get("/{deployment_id}/schema")
+async def get_deployment_schema(
+    deployment_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Return the deployment's input schema.
+
+    Prefers the live serving container's `/schema` when it's reachable,
+    so any feature-name normalization it does shows up in the UI. Falls
+    back to the trainer-produced `input_schema.json` on disk.
+    """
+    dep = await db.get(Deployment, deployment_id)
+    if dep is None:
+        raise HTTPException(status_code=404, detail="deployment_not_found")
+
+    if dep.status == "active" and dep.internal_url:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{dep.internal_url}/schema")
+                if r.status_code == 200:
+                    body = r.json()
+                    return body.get("input") if isinstance(body, dict) and "input" in body else body
+        except httpx.HTTPError:
+            pass
+
+    mv = await db.get(ModelVersion, dep.model_version_id)
+    if mv is None:
+        raise HTTPException(status_code=404, detail="model_version_not_found")
+
+    if mv.input_schema_json:
+        return mv.input_schema_json
+
+    run = await db.get(Run, mv.run_id)
+    if run is not None:
+        schema_path = storage.run_artifacts_dir(run.id) / "input_schema.json"
+        if schema_path.exists():
+            import json as _json
+
+            try:
+                return _json.loads(schema_path.read_text())
+            except Exception:
+                pass
+
+    return {"type": "object", "properties": {}, "additionalProperties": True}
 
 
 @router.post("/{deployment_id}/predict", response_model=PredictResponse)
