@@ -16,6 +16,12 @@ interface TrainingLogStreamProps {
   eventName?: string;
   className?: string;
   maxLines?: number;
+  /**
+   * Persisted log lines to replay on mount (and any time the array identity
+   * changes). The SSE stream continues from there, so refreshes mid-run and
+   * revisits after completion both show the full transcript.
+   */
+  history?: LogLine[];
 }
 
 const LEVEL_CLASS: Record<LogLine["level"], string> = {
@@ -39,11 +45,21 @@ export function TrainingLogStream({
   eventName = "log",
   className,
   maxLines = 2000,
+  history,
 }: TrainingLogStreamProps) {
-  const [lines, setLines] = useState<LogLine[]>([]);
+  const [lines, setLines] = useState<LogLine[]>(history ?? []);
   const [filter, setFilter] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const events = useMemo(() => [eventName] as const, [eventName]);
+
+  // Refill the transcript when history arrives/changes. Replaces rather than
+  // appends — persisted logs are authoritative for what happened before the
+  // SSE connection opened, and duplicates from a reconnect would be confusing.
+  useEffect(() => {
+    if (history && history.length > 0) {
+      setLines(history.slice(-maxLines));
+    }
+  }, [history, maxLines]);
 
   const { connectionState } = useEventSource<LogLine>({
     url,

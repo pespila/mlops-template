@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aipacken import storage
 from aipacken.api.schemas.runs import (
     ArtifactRead,
     MetricRead,
@@ -160,6 +161,54 @@ async def get_run_bias(
         }
         for r in rows
     ]
+
+
+@router.get("/{run_id}/logs")
+async def get_run_logs(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, str]]:
+    """Replay the persisted training-log transcript for a run.
+
+    Returns one record per captured line in the shape the frontend's
+    TrainingLogStream already consumes. When the trainer is still running
+    the file may be missing or partial — the SSE channel fills the gap.
+    """
+    r = await db.get(Run, run_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+
+    logs_path = storage.run_logs_path(run_id)
+    if not logs_path.exists():
+        return []
+
+    from datetime import datetime as _dt, timezone as _tz
+    import json as _json
+
+    out: list[dict[str, str]] = []
+    for raw in logs_path.read_text(errors="replace").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        if raw.startswith("{"):
+            try:
+                parsed = _json.loads(raw)
+                if isinstance(parsed, dict):
+                    out.append(
+                        {
+                            "ts": str(parsed.get("ts") or _dt.now(_tz.utc).isoformat()),
+                            "level": str(parsed.get("level") or "info").lower(),
+                            "message": str(parsed.get("message") or parsed.get("msg") or raw),
+                        }
+                    )
+                    continue
+            except _json.JSONDecodeError:
+                pass
+        upper = raw.upper()
+        level = "error" if "ERROR" in upper else ("warn" if "WARN" in upper else "info")
+        out.append({"ts": _dt.now(_tz.utc).isoformat(), "level": level, "message": raw})
+    return out
 
 
 @router.post("/{run_id}/cancel", response_model=RunRead)

@@ -356,6 +356,10 @@ export const api = {
     metrics: (id: string) => apiFetch<RunMetric[]>(`/runs/${encodeURIComponent(id)}/metrics`),
     artifacts: (id: string) =>
       apiFetch<RunArtifact[]>(`/runs/${encodeURIComponent(id)}/artifacts`),
+    logs: (id: string) =>
+      apiFetch<Array<{ ts: string; level: string; message: string }>>(
+        `/runs/${encodeURIComponent(id)}/logs`,
+      ),
     explanations: (id: string) =>
       apiFetch<
         Array<{

@@ -60,6 +60,21 @@ export function RunDetail() {
     refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? false : 5_000),
   });
 
+  const logHistory = useQuery({
+    queryKey: ["runs", id, "logs"],
+    queryFn: () => api.runs.logs(id),
+    enabled: Boolean(id),
+    // Keep polling the persisted transcript until the run finishes so the
+    // "Closed" SSE state still shows a complete log after a refresh.
+    refetchInterval: (q) => {
+      const status = run.data?.status;
+      if (status === "succeeded" || status === "failed" || status === "cancelled") {
+        return (q.state.data?.length ?? 0) > 0 ? false : 3_000;
+      }
+      return 5_000;
+    },
+  });
+
   const shapBars = useMemo(() => {
     const first = explanations.data?.[0];
     if (!first) return [] as { feature: string; importance: number }[];
@@ -207,7 +222,15 @@ export function RunDetail() {
         </button>
         {logsOpen ? (
           <div className="p-4">
-            <TrainingLogStream url={`/sse/runs/${id}/logs`} enabled />
+            <TrainingLogStream
+              url={`/sse/runs/${id}/logs`}
+              enabled
+              history={(logHistory.data ?? []).map((l) => ({
+                ts: l.ts,
+                level: (l.level as "debug" | "info" | "warn" | "error") ?? "info",
+                message: l.message,
+              }))}
+            />
           </div>
         ) : null}
       </GlassCard>
