@@ -50,7 +50,6 @@ async def get_model(
         id=rm.id,
         name=rm.name,
         description=rm.description,
-        mlflow_name=rm.mlflow_name,
         created_at=rm.created_at,
         updated_at=rm.updated_at,
         versions=[ModelVersionRead.model_validate(v) for v in rm.versions],

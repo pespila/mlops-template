@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 from typing import Any
 
@@ -8,19 +7,11 @@ import pandas as pd
 import structlog
 from sqlalchemy import select
 
-from aipacken.config import get_settings
+from aipacken import storage
 from aipacken.db.models import Dataset, FeatureSchema
-from aipacken.services.minio_client import download_fileobj, upload_fileobj
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
-
-
-def _parse_s3_uri(uri: str) -> tuple[str, str]:
-    assert uri.startswith("s3://")
-    _, _, rest = uri.partition("s3://")
-    bucket, _, key = rest.partition("/")
-    return bucket, key
 
 
 def _infer_semantic(series: pd.Series) -> str:
@@ -38,7 +29,6 @@ def _infer_semantic(series: pd.Series) -> str:
 
 async def profile_dataset(ctx: dict[str, Any], dataset_id: str) -> dict[str, Any]:
     session_factory = ctx["session_factory"]
-    settings = get_settings()
 
     async with session_factory() as db:
         dataset = await db.get(Dataset, dataset_id)
@@ -50,13 +40,9 @@ async def profile_dataset(ctx: dict[str, Any], dataset_id: str) -> dict[str, Any
         await db.commit()
         await publish(f"dataset:{dataset_id}:status", {"status": "profiling"})
 
-        bucket, key = _parse_s3_uri(dataset.storage_uri)
-        buf = io.BytesIO()
-        download_fileobj(bucket, key, buf)
-        buf.seek(0)
-
+        src = storage.to_absolute(dataset.storage_path)
         try:
-            df = pd.read_csv(buf)
+            df = pd.read_csv(src)
         except Exception as exc:
             logger.exception("profile_dataset.read_failed")
             dataset.status = "error"
@@ -112,15 +98,11 @@ async def profile_dataset(ctx: dict[str, Any], dataset_id: str) -> dict[str, Any
                 "unique_count": unique_count,
             }
 
-        summary_bytes = json.dumps(summary, default=str).encode("utf-8")
-        profile_key = f"{dataset_id}/profile/summary.json"
-        upload_fileobj(
-            io.BytesIO(summary_bytes),
-            bucket=settings.s3_bucket_reports,
-            key=profile_key,
-            content_type="application/json",
-        )
-        dataset.profile_uri = f"s3://{settings.s3_bucket_reports}/{profile_key}"
+        profile_path = storage.dataset_profile_path(dataset_id)
+        profile_path.parent.mkdir(parents=True, exist_ok=True)
+        profile_path.write_text(json.dumps(summary, default=str))
+
+        dataset.profile_path = storage.to_relative(profile_path)
         dataset.profile_summary_json = summary
         dataset.status = "ready"
         await db.commit()

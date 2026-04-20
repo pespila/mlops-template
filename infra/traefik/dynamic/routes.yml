@@ -5,13 +5,6 @@ http:
       entryPoints: [web]
       service: api
       priority: 100
-    # /mlflow route removed — MLflow is an internal tracking backend only.
-    # The platform surfaces metrics + artifacts directly in its own UI.
-    minio-console:
-      rule: "PathPrefix(`/minio-console`)"
-      entryPoints: [web]
-      service: minio-console
-      priority: 80
     frontend:
       rule: "PathPrefix(`/`)"
       entryPoints: [web]
@@ -23,12 +16,7 @@ http:
       loadBalancer:
         servers:
           - url: "http://api:8000"
-    minio-console:
-      loadBalancer:
-        servers:
-          - url: "http://minio:9001"
     frontend:
       loadBalancer:
         servers:
           - url: "http://frontend:80"
-

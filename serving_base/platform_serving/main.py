@@ -85,19 +85,19 @@ def _sample_row_from_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    model_uri = os.environ.get("MODEL_URI", "")
-    state.model_uri = model_uri
-    log.info("serving.startup", model_uri=model_uri)
+    storage_path = os.environ.get("MODEL_STORAGE_PATH", "")
+    state.model_uri = storage_path
+    log.info("serving.startup", storage_path=storage_path)
 
-    if not model_uri:
+    if not storage_path:
         # Allow the container to boot for /health checks even without a model,
         # so operators can diagnose misconfiguration.
-        log.error("serving.no_model_uri")
+        log.error("serving.no_storage_path")
         yield
         return
 
     try:
-        model, input_schema, output_schema = load_model(model_uri)
+        model, input_schema, output_schema = load_model()
     except Exception as exc:
         log.error("serving.load_failed", error=str(exc))
         raise

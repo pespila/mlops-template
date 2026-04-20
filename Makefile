@@ -32,7 +32,7 @@ help:
 	@echo "  make down         - Stop the stack"
 	@echo "  make clean        - Stop the stack AND drop volumes"
 	@echo "  make logs         - Tail all container logs"
-	@echo "  make seed         - Seed a demo dataset into MinIO"
+	@echo "  make seed         - Seed a demo dataset onto the platform-data volume"
 	@echo "  make test         - Run pytest + vitest"
 	@echo "  make test-e2e     - Run Playwright end-to-end tests"
 	@echo "  make lint         - Run ruff + eslint"

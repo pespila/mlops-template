@@ -15,15 +15,15 @@ async def compute_shap_and_bias(db: AsyncSession, run: Run) -> dict[str, Any]:
 
     The heavy SHAP + fairlearn computation runs inside the trainer container
     (so it inherits the model's framework) and writes result JSON + PNGs to
-    MinIO. This function picks up those artifacts and records pointer rows.
-    If the trainer published nothing yet we create empty placeholders so the
-    UI can render a graceful "not available" state.
+    the shared platform-data volume. The train_run worker reads those
+    artifacts directly; this function only creates graceful "not available"
+    placeholder rows when the trainer published nothing.
     """
     placeholder_shap = ExplanationArtifact(
         run_id=run.id,
         kind="shap",
         feature_importance_json=None,
-        artifact_uri=None,
+        artifact_path=None,
     )
     db.add(placeholder_shap)
 
@@ -33,7 +33,7 @@ async def compute_shap_and_bias(db: AsyncSession, run: Run) -> dict[str, Any]:
         metric_name="demographic_parity_difference",
         group_values_json={},
         overall_value=None,
-        report_uri=None,
+        report_path=None,
     )
     db.add(placeholder_bias)
     await db.flush()

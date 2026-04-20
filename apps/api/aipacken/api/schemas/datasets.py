@@ -60,10 +60,10 @@ class DatasetRead(BaseModel):
     # Frontend-facing alias
     column_count: int | None = Field(default=None, validation_alias="col_count")
     size_bytes: int | None = None
-    storage_uri: str
+    storage_path: str
     checksum: str | None = None
     status: str
-    profile_uri: str | None = None
+    profile_path: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -76,4 +76,4 @@ class DatasetList(BaseModel):
 class DatasetProfile(BaseModel):
     dataset_id: str
     summary: dict[str, Any] | None = None
-    report_uri: str | None = None
+    report_path: str | None = None

@@ -44,7 +44,7 @@ build/
 # ---------- Docker / infra ----------
 *.log
 .postgres_data/
-.minio_data/
+.platform_data/
 
 # ---------- Design ----------
 # DESIGN.zip is checked in as the source-of-truth for the AIpacken brand

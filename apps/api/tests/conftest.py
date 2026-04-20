@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
 
 os.environ.setdefault("PLATFORM_SECRET_KEY", "x" * 64)
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+# Redirect the platform data volume to a per-pytest temp dir so tests that touch
+# the filesystem don't need a real Docker volume.
+_TEST_DATA_ROOT = tempfile.mkdtemp(prefix="aipacken-test-")
+os.environ.setdefault("DATA_ROOT", _TEST_DATA_ROOT)
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -58,11 +63,6 @@ async def client(session_factory: Any, monkeypatch: pytest.MonkeyPatch) -> Async
     from aipacken import main as main_module
 
     monkeypatch.setattr(main_module, "SessionLocal", session_factory)
-
-    # Disable MinIO bucket ensure during tests.
-    from aipacken.services import minio_client
-
-    monkeypatch.setattr(minio_client, "ensure_buckets", lambda: None)
 
     # Disable Arq enqueue during tests — replaced with an AsyncMock.
     from aipacken.jobs import queue as queue_module

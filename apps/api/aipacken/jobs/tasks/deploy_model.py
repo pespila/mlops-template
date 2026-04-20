@@ -24,7 +24,7 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
         if dep is None:
             return {"status": "missing"}
         mv = await db.get(ModelVersion, dep.model_version_id)
-        if mv is None:
+        if mv is None or not mv.storage_path:
             dep.status = "failed"
             await db.commit()
             return {"status": "failed", "reason": "model_version_missing"}
@@ -35,11 +35,9 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
 
         image = mv.serving_image_uri or settings.serving_base_image
         env = {
-            "MODEL_URI": f"models:/{mv.registered_model_id}/{mv.mlflow_version or 'latest'}",
-            "MLFLOW_TRACKING_URI": settings.mlflow_tracking_uri,
-            "S3_ENDPOINT_URL": settings.s3_endpoint_url,
-            "AWS_ACCESS_KEY_ID": settings.minio_root_user,
-            "AWS_SECRET_ACCESS_KEY": settings.minio_root_password,
+            "MODEL_STORAGE_PATH": mv.storage_path,
+            "MODEL_KIND": mv.model_kind,
+            "DATA_ROOT": settings.data_root,
             "DEPLOYMENT_ID": dep.id,
             "INTERNAL_INGEST_URL": "http://api:8000/api/internal/predictions",
             "INTERNAL_HMAC_TOKEN": settings.internal_hmac_token,
@@ -62,6 +60,13 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
                 nano_cpus=1_000_000_000,
                 network=settings.models_network,
                 labels=labels,
+                mounts=[
+                    {
+                        "source": "platform-data",
+                        "target": settings.data_root,
+                        "read_only": True,
+                    }
+                ],
             )
         except Exception as exc:
             logger.exception("deploy_model.run_failed")

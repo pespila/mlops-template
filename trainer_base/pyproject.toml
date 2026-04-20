@@ -8,8 +8,6 @@ dependencies = [
   "pyarrow==17.0.0",
   "scikit-learn==1.5.2",
   "numpy==1.26.4",
-  "boto3==1.35.0",
-  "mlflow-skinny==2.17.0",
   "shap==0.46.0",
   "fairlearn==0.11.0",
   "pydantic==2.9.2",

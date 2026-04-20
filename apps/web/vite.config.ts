@@ -15,7 +15,6 @@ export default defineConfig({
     proxy: {
       "/api": "http://api:8000",
       "/sse": "http://api:8000",
-      "/mlflow": "http://mlflow:5000",
     },
   },
   test: {

@@ -1,9 +1,5 @@
-Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved. 
+AIpacken AI Platform
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-
-boto3 under the Apache License Version 2.0
-botocore under the Apache License Version 2.0
+This project ships without external cloud SDKs. All runtime dependencies are
+declared in the per-component pyproject.toml / package.json manifests and are
+pulled at build time from the public PyPI and npm registries.

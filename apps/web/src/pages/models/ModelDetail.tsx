@@ -46,9 +46,7 @@ export function ModelDetail() {
             </thead>
             <tbody className="divide-y divide-[color:var(--border)]">
               {(model.data?.versions ?? []).map((v) => {
-                const version = (v as { mlflow_version?: string | null; version?: number }).mlflow_version
-                  ?? (v as { version?: number }).version
-                  ?? "1";
+                const version = v.version ?? 1;
                 const metrics =
                   ((v as { metrics?: Record<string, number> }).metrics) ?? {};
                 return (

@@ -1,54 +1,47 @@
-"""Seed a small demo dataset into MinIO + Postgres.
+"""Seed a small demo dataset onto the platform-data volume + Postgres.
 
 Invoked by `make seed`. Creates an iris-like classification dataset in
-memory, uploads it as CSV to MinIO `datasets/demo/train.csv`, and creates
+memory, writes it as CSV under `datasets/demo/raw/train.csv`, and creates
 a Dataset row owned by the admin user.
 """
 
 from __future__ import annotations
 
 import asyncio
-import io
 import uuid
 
 import structlog
 from sklearn.datasets import load_iris
 from sqlalchemy import select
 
-from aipacken.config import get_settings
+from aipacken import storage
 from aipacken.db import SessionLocal
 from aipacken.db.models import Dataset, User
-from aipacken.services.minio_client import ensure_buckets, upload_fileobj
 
 logger = structlog.get_logger(__name__)
 
 
 async def seed_demo() -> str:
-    settings = get_settings()
-    ensure_buckets()
+    storage.ensure_base_dirs()
 
     import pandas as pd
 
     iris = load_iris(as_frame=True)
     df = iris.frame.rename(columns={"target": "species"})
     df["species"] = df["species"].astype(int)
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
 
-    key = "demo/train.csv"
-    upload_fileobj(
-        io.BytesIO(csv_bytes),
-        bucket=settings.s3_bucket_datasets,
-        key=key,
-        content_type="text/csv",
-    )
-    storage_uri = f"s3://{settings.s3_bucket_datasets}/{key}"
+    dataset_id = "demo"
+    raw_path = storage.dataset_raw_path(dataset_id, "train.csv")
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(raw_path, index=False)
+    storage_path = storage.to_relative(raw_path)
 
     async with SessionLocal() as db:
         admin = (await db.execute(select(User).where(User.role == "admin"))).scalars().first()
         if admin is None:
             raise RuntimeError("admin user not seeded — run migrations/startup first")
         existing = (
-            await db.execute(select(Dataset).where(Dataset.storage_uri == storage_uri))
+            await db.execute(select(Dataset).where(Dataset.storage_path == storage_path))
         ).scalars().first()
         if existing is not None:
             logger.info("seed.demo.exists", dataset_id=existing.id)
@@ -60,7 +53,8 @@ async def seed_demo() -> str:
             source_filename="train.csv",
             row_count=int(df.shape[0]),
             col_count=int(df.shape[1]),
-            storage_uri=storage_uri,
+            size_bytes=raw_path.stat().st_size,
+            storage_path=storage_path,
             status="uploaded",
         )
         db.add(d)

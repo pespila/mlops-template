@@ -1,15 +1,35 @@
+"""Training orchestration — pure filesystem, no S3/MLflow in sight.
+
+The worker spawns a trainer container with the platform-data volume mounted,
+waits for it to exit, then walks the run directory and mirrors:
+
+  metrics.jsonl        -> Metric rows
+  artifacts/*          -> Artifact rows
+  reports/shap.json    -> ExplanationArtifact row
+  reports/bias.json    -> BiasReport rows
+  artifacts/model.pkl  -> RegisteredModel + ModelVersion rows
+
+Each of those five steps commits independently so a later failure doesn't
+roll back earlier successes.
+"""
+
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import structlog
 
+from aipacken import storage
 from aipacken.config import get_settings
 from aipacken.db.models import (
     Artifact,
+    BiasReport,
     Dataset,
+    ExplanationArtifact,
     Metric,
     ModelCatalogEntry,
     ModelVersion,
@@ -19,18 +39,9 @@ from aipacken.db.models import (
 )
 from aipacken.docker_client.builder_client import get_builder_client
 from aipacken.jobs.queue import enqueue
-from aipacken.services.minio_client import presign_get
-from aipacken.services.mlflow_client import create_run, ensure_experiment
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
-
-
-def _parse_s3_uri(uri: str) -> tuple[str, str]:
-    assert uri.startswith("s3://")
-    rest = uri[len("s3://") :]
-    bucket, _, key = rest.partition("/")
-    return bucket, key
 
 
 async def _mark_run_failed(session_factory: Any, run_id: str, error: str) -> None:
@@ -46,6 +57,26 @@ async def _mark_run_failed(session_factory: Any, run_id: str, error: str) -> Non
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("train_run.mark_failed_error", error=str(exc))
+
+
+def _classify_artifact(name: str) -> tuple[str, str | None]:
+    """Return (kind, content_type) for an artifact filename."""
+    lower = name.lower()
+    if lower.endswith(".pkl") or lower.endswith(".joblib"):
+        return "model", "application/octet-stream"
+    if lower.endswith(".png"):
+        if "shap" in lower:
+            return "shap", "image/png"
+        if "bias" in lower:
+            return "bias", "image/png"
+        return "image", "image/png"
+    if lower.endswith(".json"):
+        return "json", "application/json"
+    if lower.endswith(".csv"):
+        return "csv", "text/csv"
+    if lower.endswith(".log") or lower.endswith(".jsonl"):
+        return "logs", "text/plain"
+    return "file", None
 
 
 async def train_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
@@ -76,39 +107,32 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             await db.commit()
             return {"status": "failed", "reason": "missing_dependencies"}
 
-        try:
-            exp_id = ensure_experiment(f"run-{run.experiment_id}")
-            mlflow_run_id = create_run(exp_id, run_name=f"run-{run.id}")
-        except Exception as exc:
-            logger.exception("mlflow.create_failed")
-            mlflow_run_id = None
+        storage.ensure_run_dirs(run_id)
 
-        run.mlflow_run_id = mlflow_run_id
         run.status = "running"
         run.started_at = datetime.now(timezone.utc)
         await db.commit()
 
-        bucket, key = _parse_s3_uri(dataset.storage_uri)
-        dataset_uri = presign_get(bucket, key, expires_in=6 * 3600)
+        dataset_rel = dataset.storage_path
+        dataset_filename = Path(dataset_rel).name
 
         env = {
-            "DATASET_URI": dataset_uri,
+            "RUN_ID": run.id,
+            "DATA_ROOT": settings.data_root,
+            "DATASET_PATH": f"{settings.data_root}/{dataset_rel}",
+            "DATASET_FILENAME": dataset_filename,
+            "RUN_DIR": f"{settings.data_root}/runs/{run.id}",
             "TRANSFORM_CONFIG": json.dumps(
                 {
                     "target": tcfg.target_column,
-                    "target_column": tcfg.target_column,  # alias for older trainer images
                     "transforms": tcfg.transforms_json or [],
                     "split": tcfg.split_json or {"train": 0.7, "val": 0.15, "test": 0.15},
                     "sensitive_features": tcfg.sensitive_features or [],
                 }
             ),
             "SENSITIVE_FEATURES": json.dumps(tcfg.sensitive_features or []),
-            "ARTIFACT_BUCKET": settings.s3_bucket_artifacts,
-            "MLFLOW_EXPERIMENT_ID": exp_id or "",
             "MODEL_CATALOG": json.dumps(
                 {
-                    # Trainer adapters key off `kind` — pass the model identifier
-                    # (`sklearn_logistic`, `autogluon`, ...), not the ML task.
                     "kind": entry.name,
                     "task": entry.kind,
                     "name": entry.name,
@@ -117,17 +141,6 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                     "hyperparams": run.hyperparams_json,
                 }
             ),
-            "MLFLOW_TRACKING_URI": settings.mlflow_tracking_uri,
-            "MLFLOW_RUN_ID": mlflow_run_id or "",
-            # MLflow's S3 artifact backend needs the endpoint URL under its
-            # own env name (MLFLOW_S3_ENDPOINT_URL). Without it boto3 defaults
-            # to real AWS S3 and our MinIO creds get rejected.
-            "MLFLOW_S3_ENDPOINT_URL": settings.s3_endpoint_url,
-            "S3_ENDPOINT_URL": settings.s3_endpoint_url,
-            "AWS_ACCESS_KEY_ID": settings.minio_root_user,
-            "AWS_SECRET_ACCESS_KEY": settings.minio_root_password,
-            "AWS_DEFAULT_REGION": settings.s3_region,
-            "RUN_ID": run.id,
         }
 
         memory_gb = int(run.resource_limits_json.get("memory_gb", settings.training_default_memory_gb))
@@ -140,10 +153,19 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                 env=env,
                 memory_bytes=memory_gb * 1024 * 1024 * 1024,
                 nano_cpus=cpus * 1_000_000_000,
-                # v0: share platform-net so the trainer can reach MinIO + MLflow.
-                # v1: spin up an ephemeral train-net-{run.id} with a proxy to only those two.
+                # Training needs no outbound network — data is on the volume.
+                # Use platform-net for now so `make dev` on Docker Desktop can
+                # create containers without a per-job network; tighten to `none`
+                # in v1 once we validate across Docker variants.
                 network="platform-net",
                 labels={"platform.run_id": run.id},
+                mounts=[
+                    {
+                        "source": "platform-data",
+                        "target": settings.data_root,
+                        "read_only": False,
+                    }
+                ],
             )
         except Exception as exc:
             logger.exception("builder.run_failed")
@@ -157,9 +179,8 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         run.container_id = res["container_id"]
         await db.commit()
 
-    # Log tailing (separate scope) — pub/sub to the frontend-visible channel
-    # AND accumulate a local buffer so we can persist a full transcript when
-    # the container exits.
+    # Log tailing — pub/sub to the frontend-visible channel AND accumulate a
+    # local buffer so we can persist a full transcript on exit.
     captured_lines: list[str] = []
     try:
         resp = await builder.stream_logs(res["container_id"])
@@ -171,7 +192,6 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("train_run.log_tail_error", error=str(exc))
 
-    # Container exited — block for the final exit code so we know success/fail.
     exit_code = -1
     try:
         wait_res = await builder.wait(res["container_id"])
@@ -179,37 +199,39 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("train_run.wait_failed", error=str(exc))
 
+    run_root = storage.run_dir(run_id)
+    artifacts_root = storage.run_artifacts_dir(run_id)
+    reports_root = storage.run_reports_dir(run_id)
+    logs_path = storage.run_logs_path(run_id)
+
+    # Persist the captured log transcript to the volume before we exit the
+    # worker's scope — refresh of the run detail page then replays it.
+    if captured_lines:
+        try:
+            logs_path.write_text("\n".join(captured_lines))
+        except Exception as exc:
+            logger.warning("train_run.log_persist_failed", error=str(exc))
+
     async with session_factory() as db:
         run = await db.get(Run, run_id)
         if run is None:
             return {"status": "missing"}
 
-        # Persist logs to MinIO + register an Artifact row so refresh shows history.
-        if captured_lines:
-            import io as _io
-
-            from aipacken.services.minio_client import upload_fileobj
-
-            log_bytes = "\n".join(captured_lines).encode("utf-8")
-            log_key = f"{run_id}/logs/training.log"
+        if logs_path.exists():
             try:
-                upload_fileobj(
-                    _io.BytesIO(log_bytes),
-                    bucket=settings.s3_bucket_artifacts,
-                    key=log_key,
-                    content_type="text/plain",
-                )
                 db.add(
                     Artifact(
                         run_id=run_id,
                         kind="logs",
-                        uri=f"s3://{settings.s3_bucket_artifacts}/{log_key}",
-                        size_bytes=len(log_bytes),
+                        name="training.log",
+                        uri=storage.to_relative(logs_path),
+                        size_bytes=logs_path.stat().st_size,
                         content_type="text/plain",
                     )
                 )
+                await db.commit()
             except Exception as exc:
-                logger.warning("train_run.log_persist_failed", error=str(exc))
+                logger.warning("train_run.log_artifact_failed", error=str(exc))
 
         if exit_code != 0:
             run.status = "failed"
@@ -218,153 +240,177 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             await db.commit()
             return {"status": "failed", "exit_code": exit_code}
 
-        # Success path. Each sync step is committed independently so a
-        # later failure doesn't roll back earlier successes (metrics
-        # survive even if artifact mirror or ModelVersion registration
-        # fails).
         run.status = "succeeded"
         run.finished_at = datetime.now(timezone.utc)
         await db.commit()
 
-    if mlflow_run_id:
-        from aipacken.services.mlflow_client import get_mlflow_client
-
-        mc = get_mlflow_client()
-
-        # Step 1: metrics
+    # --- Step 1: metrics -----------------------------------------------------
+    metrics_path = storage.run_metrics_path(run_id)
+    if metrics_path.exists():
         try:
-            mlflow_run = mc.get_run(mlflow_run_id)
-            metrics_items = list((mlflow_run.data.metrics or {}).items())
+            rows: list[dict[str, Any]] = []
+            for raw in metrics_path.read_text().splitlines():
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rows.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    continue
             async with session_factory() as db2:
-                for name, value in metrics_items:
-                    db2.add(Metric(run_id=run_id, name=name, value=float(value)))
+                for row in rows:
+                    name = str(row.get("name", "")).strip()
+                    if not name:
+                        continue
+                    try:
+                        value = float(row.get("value"))
+                    except (TypeError, ValueError):
+                        continue
+                    db2.add(
+                        Metric(
+                            run_id=run_id,
+                            name=name,
+                            value=value,
+                            step=int(row["step"]) if "step" in row else None,
+                            phase=row.get("phase"),
+                        )
+                    )
                 await db2.commit()
         except Exception as exc:
             logger.warning("train_run.metric_sync_failed", error=str(exc))
-            mlflow_run = None
 
-        # Step 2: model pointer + artifact mirror
-        artifact_uri = None
+    # --- Step 2: artifacts + model pointer -----------------------------------
+    model_artifact_rel: str | None = None
+    model_kind = "sklearn"
+    if artifacts_root.exists():
         try:
-            if mlflow_run is None:
-                mlflow_run = mc.get_run(mlflow_run_id)
-            artifact_uri = mlflow_run.info.artifact_uri
             async with session_factory() as db2:
-                db2.add(
-                    Artifact(
-                        run_id=run_id,
-                        kind="model",
-                        uri=f"{artifact_uri}/model",
-                        content_type="application/x-mlflow-pyfunc",
-                    )
-                )
-                try:
-                    for art in mc.list_artifacts(mlflow_run_id):
-                        if art.path == "model":
-                            continue
-                        lname = art.path.lower()
-                        kind = "file"
-                        if "shap" in lname:
-                            kind = "shap"
-                        elif "bias" in lname:
-                            kind = "bias"
-                        elif lname.endswith("input_schema.json"):
-                            kind = "schema"
-                        elif lname.endswith("leaderboard.json"):
-                            kind = "leaderboard"
+                for entry_path in sorted(artifacts_root.iterdir()):
+                    kind, content_type = _classify_artifact(entry_path.name)
+                    if entry_path.is_dir():
+                        # AutoGluon predictor directory — treat as a single "model" artifact.
+                        if kind == "file":
+                            kind = "model"
+                            content_type = "application/x-directory"
+                        if kind == "model":
+                            model_artifact_rel = storage.to_relative(entry_path)
+                            model_kind = "autogluon" if "autogluon" in entry_path.name.lower() else "sklearn"
+                        total = sum(p.stat().st_size for p in entry_path.rglob("*") if p.is_file())
                         db2.add(
                             Artifact(
                                 run_id=run_id,
                                 kind=kind,
-                                uri=f"{artifact_uri}/{art.path}",
-                                size_bytes=int(art.file_size) if art.file_size else None,
+                                name=entry_path.name,
+                                uri=storage.to_relative(entry_path),
+                                size_bytes=total,
+                                content_type=content_type,
                             )
                         )
-                except Exception as exc:
-                    logger.warning("train_run.list_artifacts_failed", error=str(exc))
+                        continue
+                    if kind == "model" and model_artifact_rel is None:
+                        model_artifact_rel = storage.to_relative(entry_path)
+                    db2.add(
+                        Artifact(
+                            run_id=run_id,
+                            kind=kind,
+                            name=entry_path.name,
+                            uri=storage.to_relative(entry_path),
+                            size_bytes=entry_path.stat().st_size,
+                            content_type=content_type,
+                        )
+                    )
                 await db2.commit()
         except Exception as exc:
             logger.warning("train_run.artifact_sync_failed", error=str(exc))
 
-        # Step 3: SHAP JSON
+    # --- Step 3: SHAP --------------------------------------------------------
+    shap_report_path = reports_root / "shap.json"
+    if shap_report_path.exists():
         try:
-            import json as _json
-            import tempfile as _tempfile
-            from pathlib import Path as _Path
-
-            from aipacken.db.models import ExplanationArtifact
-
-            with _tempfile.TemporaryDirectory() as tmp:
-                shap_path = mc.download_artifacts(mlflow_run_id, "shap_report.json", tmp)
-                shap_doc = _json.loads(_Path(shap_path).read_text())
-                async with session_factory() as db2:
-                    db2.add(
-                        ExplanationArtifact(
-                            run_id=run_id,
-                            kind="shap_global",
-                            feature_importance_json=shap_doc.get("global_importance", {}),
-                            artifact_uri=(
-                                f"{artifact_uri}/shap_report.json" if artifact_uri else None
-                            ),
-                        )
+            shap_doc = json.loads(shap_report_path.read_text())
+            async with session_factory() as db2:
+                db2.add(
+                    ExplanationArtifact(
+                        run_id=run_id,
+                        kind="shap_global",
+                        feature_importance_json=shap_doc.get("global_importance", {}),
+                        artifact_path=storage.to_relative(shap_report_path),
                     )
-                    await db2.commit()
+                )
+                await db2.commit()
         except Exception as exc:
-            logger.info("train_run.shap_json_absent", error=str(exc))
+            logger.info("train_run.shap_sync_failed", error=str(exc))
 
-        # Step 4: bias JSON
+    # --- Step 4: bias --------------------------------------------------------
+    bias_report_path = reports_root / "bias.json"
+    if bias_report_path.exists():
         try:
-            import json as _json
-            import tempfile as _tempfile
-            from pathlib import Path as _Path
-
-            from aipacken.db.models import BiasReport
-
-            with _tempfile.TemporaryDirectory() as tmp:
-                bias_path = mc.download_artifacts(mlflow_run_id, "bias_report.json", tmp)
-                bias_doc = _json.loads(_Path(bias_path).read_text())
-                groups = bias_doc.get("groups") or {}
-                overall = bias_doc.get("overall")
-                overall_scalar = float(overall) if isinstance(overall, (int, float)) else None
-                async with session_factory() as db2:
-                    db2.add(
-                        BiasReport(
-                            run_id=run_id,
-                            sensitive_feature=",".join(sorted(groups.keys())[:5])
-                            or "combined",
-                            metric_name=str(bias_doc.get("metric") or "accuracy"),
-                            group_values_json={
-                                "groups": groups,
-                                "deltas": bias_doc.get("deltas") or {},
-                                "overall": overall,
-                            },
-                            overall_value=overall_scalar,
-                        )
+            bias_doc = json.loads(bias_report_path.read_text())
+            groups = bias_doc.get("groups") or {}
+            overall = bias_doc.get("overall")
+            overall_scalar = float(overall) if isinstance(overall, (int, float)) else None
+            async with session_factory() as db2:
+                db2.add(
+                    BiasReport(
+                        run_id=run_id,
+                        sensitive_feature=",".join(sorted(groups.keys())[:5]) or "combined",
+                        metric_name=str(bias_doc.get("metric") or "accuracy"),
+                        group_values_json={
+                            "groups": groups,
+                            "deltas": bias_doc.get("deltas") or {},
+                            "overall": overall,
+                        },
+                        overall_value=overall_scalar,
+                        report_path=storage.to_relative(bias_report_path),
                     )
-                    await db2.commit()
+                )
+                await db2.commit()
         except Exception as exc:
-            logger.info("train_run.bias_json_absent", error=str(exc))
+            logger.info("train_run.bias_sync_failed", error=str(exc))
 
-        # Step 5: RegisteredModel + ModelVersion
+    # --- Step 5: RegisteredModel + ModelVersion ------------------------------
+    if model_artifact_rel:
         try:
             async with session_factory() as db2:
                 model_name = f"{entry.name}-run-{run_id[:8]}"
                 reg = RegisteredModel(name=model_name, description=entry.description)
                 db2.add(reg)
                 await db2.flush()
-                db2.add(
-                    ModelVersion(
-                        registered_model_id=reg.id,
-                        run_id=run_id,
-                        mlflow_version="1",
-                        stage="staging",
-                        input_schema_json={},
-                        output_schema_json={},
-                    )
+
+                mv = ModelVersion(
+                    registered_model_id=reg.id,
+                    run_id=run_id,
+                    version=1,
+                    stage="staging",
+                    model_kind=model_kind,
+                    input_schema_json={},
+                    output_schema_json={},
                 )
+                db2.add(mv)
+                await db2.flush()
+
+                # Promote the run artifact into a stable models/{mv_id}/ location
+                # so the source Run can be pruned independently from deployments.
+                mv_dir = storage.model_version_dir(mv.id)
+                mv_dir.mkdir(parents=True, exist_ok=True)
+                src_abs = storage.to_absolute(model_artifact_rel)
+                if src_abs.is_dir():
+                    dst = mv_dir / src_abs.name
+                    if not dst.exists():
+                        shutil.copytree(src_abs, dst)
+                    mv.storage_path = storage.to_relative(dst)
+                else:
+                    dst = mv_dir / src_abs.name
+                    try:
+                        if not dst.exists():
+                            dst.hardlink_to(src_abs)
+                    except OSError:
+                        shutil.copy2(src_abs, dst)
+                    mv.storage_path = storage.to_relative(dst)
+
                 await db2.commit()
         except Exception as exc:
             logger.warning("train_run.model_register_failed", error=str(exc))
 
     await enqueue("analyze_run", run_id)
-    return {"status": "succeeded", "run_id": run_id, "exit_code": exit_code}
+    return {"status": "succeeded", "run_id": run_id, "exit_code": exit_code, "run_root": str(run_root)}

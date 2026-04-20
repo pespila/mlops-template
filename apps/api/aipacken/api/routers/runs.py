@@ -112,11 +112,11 @@ async def get_run_artifacts(
     run_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Artifact]:
+) -> list[ArtifactRead]:
     rows = (
         await db.execute(select(Artifact).where(Artifact.run_id == run_id))
     ).scalars().all()
-    return list(rows)
+    return [ArtifactRead.from_row(r) for r in rows]
 
 
 @router.get("/{run_id}/explanations")
@@ -135,7 +135,7 @@ async def get_run_explanations(
             "id": r.id,
             "kind": r.kind,
             "feature_importance": r.feature_importance_json or {},
-            "artifact_uri": r.artifact_uri,
+            "artifact_path": r.artifact_path,
         }
         for r in rows
     ]

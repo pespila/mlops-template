@@ -1,8 +1,8 @@
-"""initial schema
+"""initial schema — filesystem-native, no MLflow/S3 columns
 
 Revision ID: 0001_initial
 Revises:
-Create Date: 2026-04-19
+Create Date: 2026-04-20
 
 """
 
@@ -47,10 +47,11 @@ def upgrade() -> None:
         sa.Column("source_filename", sa.String(length=512), nullable=True),
         sa.Column("row_count", sa.Integer(), nullable=True),
         sa.Column("col_count", sa.Integer(), nullable=True),
-        sa.Column("storage_uri", sa.String(length=1024), nullable=False),
+        sa.Column("size_bytes", sa.BigInteger(), nullable=True),
+        sa.Column("storage_path", sa.String(length=1024), nullable=False),
         sa.Column("checksum", sa.String(length=128), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="uploaded"),
-        sa.Column("profile_uri", sa.String(length=1024), nullable=True),
+        sa.Column("profile_path", sa.String(length=1024), nullable=True),
         sa.Column("profile_summary_json", JSONB(), nullable=True),
         *_ts_cols(),
     )
@@ -112,7 +113,6 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(length=36), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("mlflow_experiment_id", sa.String(length=128), nullable=True),
         *_ts_cols(),
     )
     op.create_index("ix_experiments_user_id", "experiments", ["user_id"])
@@ -141,7 +141,6 @@ def upgrade() -> None:
             sa.ForeignKey("model_catalog_entrys.id"),
             nullable=False,
         ),
-        sa.Column("mlflow_run_id", sa.String(length=128), nullable=True),
         sa.Column("image_uri", sa.String(length=512), nullable=True),
         sa.Column("container_id", sa.String(length=128), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="queued"),
@@ -182,6 +181,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("kind", sa.String(length=64), nullable=False),
+        sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("uri", sa.String(length=1024), nullable=False),
         sa.Column("size_bytes", sa.BigInteger(), nullable=True),
         sa.Column("content_type", sa.String(length=128), nullable=True),
@@ -194,7 +194,6 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("mlflow_name", sa.String(length=255), nullable=True),
         *_ts_cols(),
         sa.UniqueConstraint("name", name="uq_registered_models_name"),
     )
@@ -209,8 +208,10 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("run_id", sa.String(length=36), sa.ForeignKey("runs.id"), nullable=False),
-        sa.Column("mlflow_version", sa.String(length=64), nullable=True),
+        sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("stage", sa.String(length=32), nullable=False, server_default="none"),
+        sa.Column("model_kind", sa.String(length=64), nullable=False, server_default="sklearn"),
+        sa.Column("storage_path", sa.String(length=1024), nullable=True),
         sa.Column("input_schema_json", JSONB(), nullable=False),
         sa.Column("output_schema_json", JSONB(), nullable=False),
         sa.Column("serving_image_uri", sa.String(length=512), nullable=True),
@@ -307,7 +308,7 @@ def upgrade() -> None:
         sa.Column("metric_name", sa.String(length=128), nullable=False),
         sa.Column("group_values_json", JSONB(), nullable=False),
         sa.Column("overall_value", sa.Float(), nullable=True),
-        sa.Column("report_uri", sa.String(length=1024), nullable=True),
+        sa.Column("report_path", sa.String(length=1024), nullable=True),
         *_ts_cols(),
     )
     op.create_index("ix_bias_reports_run_id", "bias_reports", ["run_id"])
@@ -323,7 +324,7 @@ def upgrade() -> None:
         ),
         sa.Column("kind", sa.String(length=64), nullable=False),
         sa.Column("feature_importance_json", JSONB(), nullable=True),
-        sa.Column("artifact_uri", sa.String(length=1024), nullable=True),
+        sa.Column("artifact_path", sa.String(length=1024), nullable=True),
         *_ts_cols(),
     )
     op.create_index("ix_explanation_artifacts_run_id", "explanation_artifacts", ["run_id"])
@@ -335,7 +336,6 @@ def upgrade() -> None:
         sa.Column("tag", sa.String(length=255), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="queued"),
         sa.Column("image_id", sa.String(length=128), nullable=True),
-        sa.Column("logs_uri", sa.String(length=1024), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("related_id", sa.String(length=36), nullable=True),
         *_ts_cols(),

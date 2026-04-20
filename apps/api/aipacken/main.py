@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from aipacken.api.routers import (
+    artifacts,
     auth,
     catalog,
     datasets,
@@ -25,6 +26,7 @@ from aipacken.config import get_settings
 from aipacken.db import SessionLocal
 from aipacken.scripts.seed_admin import seed_admin
 from aipacken.scripts.seed_catalog import seed_catalog
+from aipacken import storage
 
 logger = structlog.get_logger(__name__)
 
@@ -61,11 +63,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.error("api.startup.migrations_failed", error=str(exc))
 
     try:
-        from aipacken.services.minio_client import ensure_buckets
-
-        ensure_buckets()
-    except Exception as exc:  # noqa: BLE001 — we want the app to keep starting even if MinIO is down
-        logger.warning("api.startup.minio_unavailable", error=str(exc))
+        storage.ensure_base_dirs()
+    except Exception as exc:  # noqa: BLE001 — volume may not be mounted in some contexts (tests)
+        logger.warning("api.startup.storage_unavailable", error=str(exc))
 
     try:
         async with SessionLocal() as db:
@@ -117,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(models.router, prefix="/api")
     app.include_router(deployments.router, prefix="/api")
     app.include_router(predictions.router, prefix="/api")
+    app.include_router(artifacts.router, prefix="/api")
     app.include_router(internal.router, prefix="/api")
 
     app.include_router(sse.router, prefix="/sse")

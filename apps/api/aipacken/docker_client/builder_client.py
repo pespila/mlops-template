@@ -39,6 +39,8 @@ class BuilderClient:
         network: str,
         cmd: list[str] | None = None,
         labels: dict[str, str] | None = None,
+        mounts: list[dict[str, Any]] | None = None,
+        user: str | None = "10001:10001",
     ) -> dict[str, Any]:
         payload = {
             "image": image,
@@ -48,6 +50,8 @@ class BuilderClient:
             "nano_cpus": nano_cpus,
             "network": network,
             "labels": labels or {},
+            "mounts": mounts or [],
+            "user": user,
         }
         async with self._client() as c:
             r = await c.post("/run", json=payload)

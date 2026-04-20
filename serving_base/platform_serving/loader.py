@@ -1,32 +1,30 @@
-"""MLflow model loader — wraps mlflow.pyfunc.load_model + schema inference."""
+"""Model loader — reads a model from the bind-mounted platform-data volume."""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-import mlflow.pyfunc  # type: ignore[import-not-found]
+
+def _resolve_storage_path() -> Path:
+    data_root = Path(os.environ.get("DATA_ROOT", "/var/platform-data"))
+    rel = os.environ.get("MODEL_STORAGE_PATH", "")
+    if not rel:
+        raise RuntimeError("MODEL_STORAGE_PATH is empty — serving container cannot start")
+    return data_root / rel
 
 
-def _find_input_schema(local_model_path: Path) -> dict[str, Any]:
-    """Locate ``input_schema.json`` inside a downloaded model directory.
-
-    MLflow stores pyfunc model artifacts under ``<root>/artifacts/``; sklearn
-    models store custom files alongside ``MLmodel``. We search both.
-    """
-    candidates = [
-        local_model_path / "input_schema.json",
-        local_model_path / "artifacts" / "input_schema.json",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return json.loads(candidate.read_text())
-
-    # Deep search as a last resort.
-    for found in local_model_path.rglob("input_schema.json"):
-        return json.loads(found.read_text())
-
+def _find_input_schema(model_dir: Path) -> dict[str, Any]:
+    """Look for input_schema.json next to the model artifact."""
+    search_roots = [model_dir, model_dir.parent]
+    for root in search_roots:
+        for found in root.rglob("input_schema.json"):
+            try:
+                return json.loads(found.read_text())
+            except Exception:
+                continue
     return {
         "type": "object",
         "properties": {},
@@ -35,43 +33,36 @@ def _find_input_schema(local_model_path: Path) -> dict[str, Any]:
     }
 
 
-def _output_schema_from_model(model: Any) -> dict[str, Any]:
-    """Best-effort output schema derivation from the MLflow signature."""
-    try:
-        metadata = model.metadata
-        signature = metadata.signature if metadata else None
-        if signature and signature.outputs:
-            cols = signature.outputs.to_dict()
-            return {"type": "object", "properties": {str(c.get("name", "output")): {"type": "string"} for c in cols}}
-    except Exception:
-        pass
-    return {"type": "object", "properties": {"prediction": {}}, "additionalProperties": True}
+def load(_legacy_uri: str = "") -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    """Load the model located at MODEL_STORAGE_PATH.
 
+    Returns (model, input_schema, output_schema). `_legacy_uri` is accepted for
+    signature compatibility with the previous MLflow-based loader but is
+    ignored.
+    """
+    path = _resolve_storage_path()
+    kind = (os.environ.get("MODEL_KIND") or "sklearn").lower()
 
-def load(mlflow_uri: str) -> tuple[Any, dict[str, Any], dict[str, Any]]:
-    """Load the model at *mlflow_uri*. Returns (pyfunc_model, input_schema, output_schema)."""
-    if not mlflow_uri:
-        raise RuntimeError("MODEL_URI is empty — serving container cannot start")
+    if kind == "autogluon" or path.is_dir():
+        from autogluon.tabular import TabularPredictor  # type: ignore[import-not-found]
 
-    model = mlflow.pyfunc.load_model(mlflow_uri)
+        predictor_dir = path if path.is_dir() else path.parent
+        model = TabularPredictor.load(str(predictor_dir))
+        schema_dir = predictor_dir
+    else:
+        import joblib
 
-    local_path: Path
-    try:
-        # Newer MLflow exposes _model_meta.artifact_path; older has .metadata.
-        local_path = Path(model._model_impl.context.artifacts.get("__root__", "."))  # type: ignore[attr-defined]
-    except Exception:
-        local_path = Path(".")
+        if not path.exists():
+            raise RuntimeError(f"model artifact not found at {path}")
+        model = joblib.load(path)
+        schema_dir = path.parent
 
-    # mlflow.pyfunc.load_model downloads artifacts under a tmp dir exposed via model.metadata.
-    try:
-        from mlflow.artifacts import download_artifacts  # type: ignore[import-not-found]
-
-        local_path = Path(download_artifacts(artifact_uri=mlflow_uri))
-    except Exception:
-        pass
-
-    input_schema = _find_input_schema(local_path)
-    output_schema = _output_schema_from_model(model)
+    input_schema = _find_input_schema(schema_dir)
+    output_schema = {
+        "type": "object",
+        "properties": {"prediction": {}},
+        "additionalProperties": True,
+    }
     return model, input_schema, output_schema
 
 

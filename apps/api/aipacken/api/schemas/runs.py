@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RunCreate(BaseModel):
@@ -26,7 +26,6 @@ class RunRead(BaseModel):
     dataset_id: str
     transform_config_id: str
     model_catalog_id: str
-    mlflow_run_id: str | None = None
     image_uri: str | None = None
     container_id: str | None = None
     status: str
@@ -56,11 +55,25 @@ class MetricRead(BaseModel):
 
 
 class ArtifactRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    """Frontend-facing artifact row.
+
+    The DB column is still named `uri` for historical reasons but it stores a
+    relative path under `/var/platform-data`. `download_url` is computed.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
     run_id: str
     kind: str
+    name: str
     uri: str
     size_bytes: int | None = None
     content_type: str | None = None
+    download_url: str = Field(default="")
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ArtifactRead":
+        data = cls.model_validate(row)
+        data.download_url = f"/api/artifacts/{data.id}/download"
+        return data

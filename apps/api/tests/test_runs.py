@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
@@ -11,12 +10,11 @@ from httpx import AsyncClient
 async def test_create_run_smoke(admin_login: AsyncClient) -> None:
     client = admin_login
 
-    with patch("aipacken.api.routers.datasets.upload_fileobj", return_value="s3://datasets/x"):
-        r = await client.post(
-            "/api/datasets",
-            data={"name": "ds"},
-            files={"file": ("a.csv", io.BytesIO(b"a,b,y\n1,2,0\n"), "text/csv")},
-        )
+    r = await client.post(
+        "/api/datasets",
+        data={"name": "ds"},
+        files={"file": ("a.csv", io.BytesIO(b"a,b,y\n1,2,0\n"), "text/csv")},
+    )
     assert r.status_code == 201
     dataset_id = r.json()["id"]
 
@@ -32,18 +30,10 @@ async def test_create_run_smoke(admin_login: AsyncClient) -> None:
     assert r.status_code == 201
     experiment_id = r.json()["id"]
 
-    # Manually insert a TransformConfig via the admin session's DB.
-    from aipacken.db.models import TransformConfig
     from sqlalchemy import select
-    from aipacken.db.models import User
-
-    # we can't easily get the session here; post the run directly after inserting
-    # a transform config via a small internal helper. For the smoke test we rely
-    # on a simpler path: create TransformConfig row through a DB fixture.
-    # Instead, we just assert the experiment + dataset + catalog endpoints work;
-    # a full run-create requires a TransformConfig FK. Add one via the db fixture.
 
     import aipacken.db as db_mod
+    from aipacken.db.models import TransformConfig, User
 
     async with db_mod.SessionLocal() as db:
         admin = (await db.execute(select(User).where(User.role == "admin"))).scalars().first()

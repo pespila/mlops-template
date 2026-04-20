@@ -2,16 +2,23 @@
 
 Reads configuration from env vars set by the platform worker:
 
-    RUN_ID             platform Run id (also MLFLOW_RUN_ID in most setups)
-    DATASET_URI        s3://... or pre-signed HTTP(S) URL
-    TRANSFORM_CONFIG   JSON: {target, transforms[], split{}}
-    MODEL_CATALOG      JSON: {kind, hyperparams, time_limit?, presets?}
+    RUN_ID            platform Run id
+    DATASET_PATH      absolute path to the raw dataset file (CSV/Parquet/...)
+    DATASET_FILENAME  filename only (used to dispatch by extension)
+    RUN_DIR           absolute path of /var/platform-data/runs/{run_id}
+    TRANSFORM_CONFIG  JSON: {target, transforms[], split{}, sensitive_features[]}
+    MODEL_CATALOG     JSON: {kind, hyperparams, time_limit?, presets?}
     SENSITIVE_FEATURES JSON: list[str] (may be empty)
-    MLFLOW_TRACKING_URI, MLFLOW_EXPERIMENT_ID, MLFLOW_RUN_ID
-    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_ENDPOINT_URL
-    ARTIFACT_BUCKET    s3 bucket for SHAP/bias PNG uploads
 
-Exit code: 0 on success, 1 on failure.
+Writes into RUN_DIR:
+    metrics.jsonl               one JSON object per line
+    artifacts/model.pkl         joblib-dumped pipeline (or autogluon/ dir)
+    artifacts/shap_global.png   plot
+    artifacts/bias.png          plot
+    reports/shap.json           {global_importance, ...}
+    reports/bias.json           {metric, groups, deltas, overall}
+
+Exit code: 0 on success, 1 on failure. No network calls, no external SDKs.
 """
 
 from __future__ import annotations
@@ -25,7 +32,9 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from platform_trainer import analyze, io as io_mod, mlflow_sink, transforms
+import pandas as pd
+
+from platform_trainer import analyze, transforms
 from platform_trainer.adapters import get_adapter
 
 
@@ -33,8 +42,6 @@ logger = logging.getLogger("platform_trainer")
 
 
 class _JsonFormatter(logging.Formatter):
-    """Minimal JSON formatter — avoids an extra structlog dependency."""
-
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
@@ -64,25 +71,34 @@ def _configure_logging() -> None:
     root.setLevel(logging.INFO)
 
 
-def _env(name: str, default: str | None = None, required: bool = False) -> str:
-    val = os.environ.get(name, default)
+def _env(name: str, required: bool = False) -> str:
+    val = os.environ.get(name, "")
     if required and not val:
         raise RuntimeError(f"missing required env var: {name}")
-    return val or ""
+    return val
 
 
-def _maybe_upload(local: Path, kind: str) -> str | None:
-    bucket = os.environ.get("ARTIFACT_BUCKET")
-    run_id = os.environ.get("RUN_ID") or "unknown"
-    if not bucket or not local.exists():
-        return None
-    s3_uri = f"s3://{bucket}/runs/{run_id}/{kind}/{local.name}"
-    try:
-        io_mod.upload_artifact(local, s3_uri)
-        return s3_uri
-    except Exception as exc:
-        logger.warning("artifact.upload_failed", extra={"uri": s3_uri, "error": str(exc)})
-        return None
+def _read_dataset(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix in (".csv", ".tsv"):
+        return pd.read_csv(path, sep="\t" if suffix == ".tsv" else ",")
+    if suffix in (".parquet", ".pq"):
+        return pd.read_parquet(path)
+    if suffix in (".xlsx", ".xls"):
+        return pd.read_excel(path)
+    if suffix in (".json", ".jsonl"):
+        return pd.read_json(path, lines=suffix == ".jsonl")
+    raise ValueError(f"unsupported dataset extension: {suffix!r}")
+
+
+def _append_metric(path: Path, name: str, value: float, step: int | None = None, phase: str | None = None) -> None:
+    row: dict[str, Any] = {"name": name, "value": float(value)}
+    if step is not None:
+        row["step"] = int(step)
+    if phase:
+        row["phase"] = phase
+    with path.open("a") as f:
+        f.write(json.dumps(row) + "\n")
 
 
 def _feature_names(preprocessor: Any, fallback: list[str]) -> list[str]:
@@ -96,30 +112,31 @@ def _feature_names(preprocessor: Any, fallback: list[str]) -> list[str]:
 def main() -> int:
     _configure_logging()
     t_start = time.monotonic()
+
     run_id = _env("RUN_ID", required=True)
-    logger.info("trainer.start", extra={"run_id": run_id})
+    run_dir = Path(_env("RUN_DIR", required=True))
+    dataset_path = Path(_env("DATASET_PATH", required=True))
+
+    artifacts_dir = run_dir / "artifacts"
+    reports_dir = run_dir / "reports"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = run_dir / "metrics.jsonl"
+
+    logger.info("trainer.start", extra={"run_id": run_id, "dataset_path": str(dataset_path)})
 
     try:
-        transform_cfg = io_mod.read_json_env("TRANSFORM_CONFIG")
-        model_catalog = io_mod.read_json_env("MODEL_CATALOG")
-        sensitive_features = io_mod.read_json_env("SENSITIVE_FEATURES") or []
+        transform_cfg = json.loads(_env("TRANSFORM_CONFIG") or "{}")
+        model_catalog = json.loads(_env("MODEL_CATALOG") or "{}")
+        sensitive_features = json.loads(_env("SENSITIVE_FEATURES") or "[]")
         if not isinstance(sensitive_features, list):
             raise ValueError("SENSITIVE_FEATURES must be a JSON list")
 
-        dataset_uri = _env("DATASET_URI", required=True)
         target = transform_cfg.get("target")
         if not target:
             raise ValueError("TRANSFORM_CONFIG.target is required")
 
-        work_dir = Path("/tmp/trainer")
-        work_dir.mkdir(parents=True, exist_ok=True)
-
-        # Pass the directory — io_mod preserves the remote filename extension
-        # (suffix is load-bearing: parse_dataset dispatches on it).
-        dataset_path = io_mod.download_dataset(dataset_uri, work_dir)
-        logger.info("dataset.downloaded", extra={"path": str(dataset_path)})
-
-        df = io_mod.parse_dataset(dataset_path)
+        df = _read_dataset(dataset_path)
         if target not in df.columns:
             raise ValueError(f"target column {target!r} not in dataset")
 
@@ -127,15 +144,11 @@ def main() -> int:
         logger.info("task.inferred", extra={"task": task, "rows": len(df)})
 
         # Auto label-encode non-numeric classification targets so every adapter
-        # (XGBoost/LightGBM/AutoGluon/sklearn) sees numeric y. Encoder is
-        # preserved and logged so serving can inverse_transform the prediction.
-        target_label_encoder = None
+        # (XGBoost/LightGBM/AutoGluon/sklearn) sees numeric y.
         target_classes: list[str] | None = None
         if task == "classification":
             y_series = df[target]
-            import pandas as _pd
-
-            if not _pd.api.types.is_numeric_dtype(y_series) or _pd.api.types.is_bool_dtype(y_series):
+            if not pd.api.types.is_numeric_dtype(y_series) or pd.api.types.is_bool_dtype(y_series):
                 from sklearn.preprocessing import LabelEncoder
 
                 target_label_encoder = LabelEncoder().fit(y_series)
@@ -147,7 +160,10 @@ def main() -> int:
                 )
 
         X_train, X_val, X_test, y_train, y_val, y_test = transforms.apply_split(
-            df, target=target, split_config=transform_cfg.get("split") or {}, task=task,
+            df,
+            target=target,
+            split_config=transform_cfg.get("split") or {},
+            task=task,
         )
 
         schema = transforms.coarse_schema(df.drop(columns=[target]))
@@ -165,18 +181,15 @@ def main() -> int:
 
         model: Any
         metrics: dict[str, Any]
-        flavor: str
         feature_names: list[str]
-        X_post_sample: Any
-        signature: Any = None
-        input_example: Any = None
+        flavor: str
 
         if kind == "autogluon":
             train_df = X_train.copy()
             train_df[target] = y_train.values
             val_df = X_val.copy()
             val_df[target] = y_val.values
-            predictor_path = work_dir / "autogluon"
+            predictor_path = artifacts_dir / "autogluon"
             model, metrics = adapter.fit(
                 train_df=train_df,
                 val_df=val_df,
@@ -190,8 +203,6 @@ def main() -> int:
             flavor = "autogluon"
             feature_names = list(X_train.columns)
             X_post_sample = X_val
-            input_example = X_val.head(5)
-
             y_pred = model.predict(X_val)
         else:
             model, metrics = adapter.fit(
@@ -208,21 +219,23 @@ def main() -> int:
             pre_fitted = model.named_steps["preprocess"]
             feature_names = _feature_names(pre_fitted, kept_cols)
             X_post_sample = pre_fitted.transform(X_val)
-            input_example = X_val.head(5)
-
-            try:
-                from mlflow.models.signature import infer_signature
-
-                signature = infer_signature(X_val.head(50), model.predict(X_val.head(50)))
-            except Exception:
-                signature = None
             y_pred = model.predict(X_val)
+
+            # Persist the fitted pipeline (preprocessor + estimator) for serving.
+            import joblib
+
+            joblib.dump(model, artifacts_dir / "model.pkl")
+
+        for name, value in metrics.items():
+            if isinstance(value, (int, float)):
+                _append_metric(metrics_path, name, value)
 
         logger.info(
             "train.complete",
-            extra={"metrics": {k: v for k, v in metrics.items() if not isinstance(v, (list, dict))}},
+            extra={"metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))}},
         )
 
+        # SHAP ------------------------------------------------------------------
         shap_report: dict[str, Any] = {}
         try:
             sample_n = min(200, len(X_val))
@@ -230,10 +243,12 @@ def main() -> int:
                 model=model,
                 X_sample=X_val.head(sample_n),
                 feature_names=feature_names,
+                plot_path=artifacts_dir / "shap_global.png",
             )
         except Exception as exc:
             logger.warning("shap.failed", extra={"error": str(exc)})
 
+        # Bias ------------------------------------------------------------------
         bias_report: dict[str, Any] = {}
         if sensitive_features:
             present = [c for c in sensitive_features if c in X_val.columns]
@@ -244,6 +259,7 @@ def main() -> int:
                         y_pred=y_pred,
                         sensitive_df=X_val[present],
                         metric="accuracy" if task == "classification" else "mae",
+                        plot_path=artifacts_dir / "bias.png",
                     )
                 except Exception as exc:
                     logger.warning("bias.failed", extra={"error": str(exc)})
@@ -253,95 +269,44 @@ def main() -> int:
                     extra={"reason": "sensitive features not in feature frame"},
                 )
 
-        shap_uri = _maybe_upload(Path("/tmp/shap_global.png"), "shap")
-        bias_uri = _maybe_upload(Path("/tmp/bias.png"), "bias")
-
-        # Log JSON payloads for the frontend SHAP bar chart + bias table.
-        # Use the explicit-run-id client API so we don't open a second
-        # MLflow run (which happened with the fluent start_run approach
-        # when the outer run had already been closed by log_run).
-        try:
-            import tempfile as _tempfile
-            from pathlib import Path as _Path
-
-            from mlflow.tracking import MlflowClient as _MlflowClient
-
-            mlflow_run_id_env = os.environ.get("MLFLOW_RUN_ID", "").strip()
-            tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-            if mlflow_run_id_env and (shap_report or bias_report):
-                _mc = _MlflowClient(tracking_uri=tracking_uri) if tracking_uri else _MlflowClient()
-                with _tempfile.TemporaryDirectory() as tmp:
-                    if shap_report:
-                        shap_file = _Path(tmp) / "shap_report.json"
-                        shap_file.write_text(
-                            json.dumps(
-                                {"global_importance": shap_report.get("global_importance", {})},
-                                default=str,
-                            )
-                        )
-                        _mc.log_artifact(mlflow_run_id_env, str(shap_file))
-                    if bias_report:
-                        bias_file = _Path(tmp) / "bias_report.json"
-                        bias_file.write_text(json.dumps(bias_report, default=str))
-                        _mc.log_artifact(mlflow_run_id_env, str(bias_file))
-        except Exception as exc:
-            logger.warning("mlflow.log_reports_failed", extra={"error": str(exc)})
-
-        input_schema = mlflow_sink.build_input_schema(X_post_sample, feature_names)
-        artifacts_dir = work_dir / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-        if shap_report.get("global_importance"):
-            (artifacts_dir / "shap_global_importance.json").write_text(
-                json.dumps(shap_report["global_importance"], indent=2)
-            )
+        # Persist report JSON files for the backend to mirror into Postgres.
+        if shap_report:
+            (reports_dir / "shap.json").write_text(json.dumps(
+                {"global_importance": shap_report.get("global_importance", {})},
+                default=str,
+            ))
         if bias_report:
-            (artifacts_dir / "bias_report.json").write_text(json.dumps(bias_report, indent=2, default=str))
+            (reports_dir / "bias.json").write_text(json.dumps(bias_report, default=str))
 
-        params_to_log: dict[str, Any] = {
-            "model_kind": kind,
-            "task": task,
-            "target": target,
-            "n_train": int(len(X_train)),
-            "n_val": int(len(X_val)),
-            "n_test": int(len(X_test)),
-            "hyperparams": hyperparams,
-        }
-
-        logged_run_id = mlflow_sink.log_run(
-            run_id=os.environ.get("MLFLOW_RUN_ID") or "",
-            params=params_to_log,
-            metrics=metrics,
-            artifacts_dir=artifacts_dir,
-            model=model,
-            signature=signature,
-            flavor=flavor,
-            input_example=input_example,
-            input_schema=input_schema,
-        )
+        # Persist a minimal input-schema summary alongside the model for the
+        # serving container to load at startup.
+        try:
+            if hasattr(X_post_sample, "columns"):
+                cols = list(X_post_sample.columns)
+            else:
+                cols = feature_names
+            schema_doc = {
+                "type": "object",
+                "properties": {c: {"type": "number"} for c in cols},
+                "title": "ModelInput",
+                "flavor": flavor,
+                "target": target,
+                "target_classes": target_classes,
+            }
+            (artifacts_dir / "input_schema.json").write_text(json.dumps(schema_doc))
+        except Exception as exc:
+            logger.warning("input_schema.write_failed", extra={"error": str(exc)})
 
         duration = time.monotonic() - t_start
-        logger.info(
-            "trainer.complete",
-            extra={
-                "run_id": run_id,
-                "mlflow_run_id": logged_run_id,
-                "duration_sec": round(duration, 2),
-                "shap_uri": shap_uri,
-                "bias_uri": bias_uri,
-            },
-        )
+        logger.info("trainer.complete", extra={"run_id": run_id, "duration_sec": round(duration, 2)})
         return 0
     except Exception as exc:
         logger.error(
             "trainer.failed",
             extra={"run_id": run_id, "error": str(exc), "trace": traceback.format_exc()},
         )
-        raise
+        return 1
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception:
-        sys.exit(1)
+    sys.exit(main())

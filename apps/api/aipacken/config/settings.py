@@ -16,18 +16,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://platform:platform@postgres:5432/platform"
     redis_url: str = "redis://redis:6379/0"
 
-    s3_endpoint_url: str = "http://minio:9000"
-    s3_region: str = "us-east-1"
-    minio_root_user: str = "platform"
-    minio_root_password: str = "platform-minio"
+    # Single named Docker volume for everything the platform produces.
+    data_root: str = "/var/platform-data"
 
-    s3_bucket_datasets: str = "datasets"
-    s3_bucket_artifacts: str = "artifacts"
-    s3_bucket_mlflow: str = "mlflow-artifacts"
-    s3_bucket_reports: str = "reports"
-    s3_bucket_predictions: str = "predictions"
-
-    mlflow_tracking_uri: str = "http://mlflow:5000"
     builder_url: str = "http://builder:8080"
 
     training_default_cpu: int = 4

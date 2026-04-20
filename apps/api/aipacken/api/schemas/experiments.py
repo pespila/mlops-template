@@ -17,7 +17,6 @@ class ExperimentRead(BaseModel):
     user_id: str
     name: str
     description: str | None = None
-    mlflow_experiment_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

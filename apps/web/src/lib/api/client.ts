@@ -195,11 +195,14 @@ export interface RunArtifact {
 
 export interface ModelVersionRead {
   id: string;
-  model_id: string;
+  registered_model_id: string;
   version: number;
   run_id: string;
+  stage: string;
+  model_kind: string;
+  storage_path: string | null;
   created_at: string;
-  metrics: Record<string, number>;
+  metrics?: Record<string, number>;
 }
 
 export type DeploymentStatus =
@@ -359,7 +362,7 @@ export const api = {
           id: string;
           kind: string;
           feature_importance: Record<string, number>;
-          artifact_uri: string | null;
+          artifact_path: string | null;
         }>
       >(`/runs/${encodeURIComponent(id)}/explanations`),
     bias: (id: string) =>

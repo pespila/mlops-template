@@ -7,13 +7,15 @@ from pydantic import BaseModel, ConfigDict
 
 
 class ModelVersionRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     id: str
     registered_model_id: str
     run_id: str
-    mlflow_version: str | None = None
+    version: int
     stage: str
+    model_kind: str
+    storage_path: str | None = None
     input_schema_json: dict[str, Any]
     output_schema_json: dict[str, Any]
     serving_image_uri: str | None = None
@@ -27,7 +29,6 @@ class RegisteredModelRead(BaseModel):
     id: str
     name: str
     description: str | None = None
-    mlflow_name: str | None = None
     created_at: datetime
     updated_at: datetime
 

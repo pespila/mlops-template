@@ -15,6 +15,7 @@ from typing import Any
 import docker
 import structlog
 from docker.errors import APIError, ImageNotFound, NotFound
+from docker.types import Mount
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -85,6 +86,12 @@ async def build(req: BuildRequest) -> BuildResponse:
     return BuildResponse(image_id=image.id or "", tag=req.tag)
 
 
+class VolumeMount(BaseModel):
+    source: str  # docker volume name
+    target: str  # path inside the container
+    read_only: bool = False
+
+
 class RunRequest(BaseModel):
     image: str
     cmd: list[str] | None = None
@@ -93,6 +100,8 @@ class RunRequest(BaseModel):
     nano_cpus: int = 2_000_000_000
     network: str
     labels: dict[str, str] = Field(default_factory=dict)
+    mounts: list[VolumeMount] = Field(default_factory=list)
+    user: str | None = "10001:10001"
 
 
 class RunResponse(BaseModel):
@@ -102,6 +111,10 @@ class RunResponse(BaseModel):
 @app.post("/run", response_model=RunResponse)
 async def run_container(req: RunRequest) -> RunResponse:
     client = get_docker()
+    mounts = [
+        Mount(target=m.target, source=m.source, type="volume", read_only=m.read_only)
+        for m in req.mounts
+    ]
     try:
         container = client.containers.run(
             image=req.image,
@@ -113,11 +126,12 @@ async def run_container(req: RunRequest) -> RunResponse:
             read_only=True,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
-            user="10001:10001",
+            user=req.user,
             pids_limit=512,
             tmpfs={"/tmp": ""},
             mem_limit=req.memory_bytes,
             nano_cpus=req.nano_cpus,
+            mounts=mounts,
         )
     except ImageNotFound as exc:
         raise HTTPException(status_code=404, detail=f"image_not_found: {req.image}") from exc

@@ -7,18 +7,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aipacken import storage
 from aipacken.api.schemas.datasets import (
     DatasetList,
     DatasetProfile,
     DatasetRead,
     FeatureSchemaRead,
 )
-from aipacken.config import get_settings
 from aipacken.db import get_db
 from aipacken.db.models import Dataset, FeatureSchema, User
 from aipacken.jobs.queue import enqueue
 from aipacken.services.auth import get_current_user
-from aipacken.services.minio_client import upload_fileobj
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -30,30 +29,31 @@ async def create_dataset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dataset:
-    settings = get_settings()
     dataset_id = str(uuid.uuid4())
-    key = f"{dataset_id}/raw/{file.filename or dataset_id}"
+    filename = file.filename or dataset_id
+    dest = storage.dataset_raw_path(dataset_id, filename)
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     h = hashlib.sha256()
-    body = await file.read()
-    h.update(body)
-    import io
+    size = 0
+    with dest.open("wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            h.update(chunk)
+            size += len(chunk)
 
-    upload_fileobj(
-        io.BytesIO(body),
-        bucket=settings.s3_bucket_datasets,
-        key=key,
-        content_type=file.content_type,
-    )
-
-    display_name = name or (file.filename or dataset_id).rsplit(".", 1)[0]
+    display_name = name or filename.rsplit(".", 1)[0]
 
     dataset = Dataset(
         id=dataset_id,
         user_id=user.id,
         name=display_name,
         source_filename=file.filename,
-        storage_uri=f"s3://{settings.s3_bucket_datasets}/{key}",
+        size_bytes=size,
+        storage_path=storage.to_relative(dest),
         checksum=h.hexdigest(),
         status="uploaded",
     )
@@ -96,7 +96,7 @@ async def get_dataset_profile(
     if d is None:
         raise HTTPException(status_code=404, detail="dataset_not_found")
     return DatasetProfile(
-        dataset_id=d.id, summary=d.profile_summary_json, report_uri=d.profile_uri
+        dataset_id=d.id, summary=d.profile_summary_json, report_path=d.profile_path
     )
 
 
