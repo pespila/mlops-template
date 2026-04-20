@@ -349,16 +349,24 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             groups = bias_doc.get("groups") or {}
             overall = bias_doc.get("overall")
             overall_scalar = float(overall) if isinstance(overall, (int, float)) else None
+            # Prefer the sensitive column names the trainer stamped; fall back
+            # to "combined" so we never blow past the VARCHAR(255) limit with
+            # joined group labels like "4.3|2.0|1.1|0.1,..." .
+            sens_cols = bias_doc.get("sensitive_features") or []
+            sens_label = (",".join(str(c) for c in sens_cols))[:255] if sens_cols else "combined"
             async with session_factory() as db2:
                 db2.add(
                     BiasReport(
                         run_id=run_id,
-                        sensitive_feature=",".join(sorted(groups.keys())[:5]) or "combined",
+                        sensitive_feature=sens_label,
                         metric_name=str(bias_doc.get("metric") or "accuracy"),
                         group_values_json={
                             "groups": groups,
                             "deltas": bias_doc.get("deltas") or {},
                             "overall": overall,
+                            "sensitive_features": sens_cols,
+                            "groups_truncated": bias_doc.get("groups_truncated", False),
+                            "groups_total": bias_doc.get("groups_total"),
                         },
                         overall_value=overall_scalar,
                         report_path=storage.to_relative(bias_report_path),

@@ -261,6 +261,18 @@ def main() -> int:
                         metric="accuracy" if task == "classification" else "mae",
                         plot_path=artifacts_dir / "bias.png",
                     )
+                    # Stamp the column names so the backend doesn't have to
+                    # reconstruct them from group keys (which may explode on
+                    # high-cardinality numeric features the user selected).
+                    bias_report["sensitive_features"] = present
+                    # Cap groups to keep JSON payload sane when someone
+                    # accidentally picks a continuous feature.
+                    groups = bias_report.get("groups") or {}
+                    if isinstance(groups, dict) and len(groups) > 200:
+                        sorted_keys = list(groups.keys())[:200]
+                        bias_report["groups"] = {k: groups[k] for k in sorted_keys}
+                        bias_report["groups_truncated"] = True
+                        bias_report["groups_total"] = len(groups)
                 except Exception as exc:
                     logger.warning("bias.failed", extra={"error": str(exc)})
             else:
