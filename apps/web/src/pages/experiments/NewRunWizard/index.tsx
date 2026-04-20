@@ -1,9 +1,10 @@
 import { GlassCard } from "@/components/molecules/GlassCard";
 import { StepIndicator, type StepIndicatorStep } from "@/components/molecules/StepIndicator";
 import { useT } from "@/i18n";
-import { useWizardStore } from "@/state/wizardStore";
+import { useWizardStore, type WizardStep } from "@/state/wizardStore";
 
 import { StepFeatures } from "./StepFeatures";
+import { StepHyperparameters } from "./StepHyperparameters";
 import { StepModel } from "./StepModel";
 import { StepProfile } from "./StepProfile";
 import { StepTargetSplit } from "./StepTargetSplit";
@@ -20,6 +21,7 @@ export function NewRunWizard() {
     { key: "features", label: t("wizard.step3") },
     { key: "target", label: t("wizard.step4") },
     { key: "model", label: t("wizard.step5") },
+    { key: "hyperparameters", label: t("wizard.step6") },
   ];
 
   return (
@@ -28,7 +30,7 @@ export function NewRunWizard() {
         <StepIndicator
           steps={steps}
           currentIndex={currentStep - 1}
-          onStepClick={(idx) => setStep(((idx + 1) as 1 | 2 | 3 | 4 | 5))}
+          onStepClick={(idx) => setStep(((idx + 1) as WizardStep))}
         />
       </aside>
 
@@ -38,6 +40,7 @@ export function NewRunWizard() {
         {currentStep === 3 ? <StepFeatures /> : null}
         {currentStep === 4 ? <StepTargetSplit /> : null}
         {currentStep === 5 ? <StepModel /> : null}
+        {currentStep === 6 ? <StepHyperparameters /> : null}
       </GlassCard>
     </div>
   );

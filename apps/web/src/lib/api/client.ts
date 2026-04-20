@@ -319,12 +319,28 @@ export interface JsonSchema {
 // Endpoint bindings
 // ---------------------------------------------------------------------------
 
+export type HpoSearchEntryOnWire =
+  | { type: "int"; low: number; high: number; step?: number; log?: boolean }
+  | { type: "float"; low: number; high: number; log?: boolean }
+  | { type: "categorical"; choices: Array<string | number | boolean> };
+
+export interface HpoConfigOnWire {
+  enabled: boolean;
+  n_trials?: number;
+  timeout_sec?: number;
+  metric?: string | null;
+  direction?: "maximize" | "minimize" | null;
+  search_space?: Record<string, HpoSearchEntryOnWire>;
+}
+
 export interface CreateRunInput {
   experiment_id: string;
   dataset_id: string;
   transform_config: Record<string, unknown>;
   model_catalog_id: string;
   hyperparams: Record<string, unknown>;
+  task?: TaskKind | null;
+  hpo?: HpoConfigOnWire | null;
 }
 
 export interface CreateExperimentInput {

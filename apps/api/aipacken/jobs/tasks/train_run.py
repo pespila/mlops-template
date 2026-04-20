@@ -171,6 +171,14 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         dataset_rel = dataset.storage_path
         dataset_filename = Path(dataset_rel).name
 
+        # Unpack the reserved keys the router stashed inside hyperparams_json
+        # (``_task`` and ``_hpo``) so MODEL_CATALOG carries them as first-class
+        # fields to the trainer.
+        raw_hp = dict(run.hyperparams_json or {})
+        run_task: str | None = raw_hp.pop("_task", None)
+        run_hpo: dict[str, Any] | None = raw_hp.pop("_hpo", None)
+        resolved_task = run_task or entry.kind
+
         env = {
             "RUN_ID": run.id,
             "DATA_ROOT": settings.data_root,
@@ -189,11 +197,12 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             "MODEL_CATALOG": json.dumps(
                 {
                     "kind": entry.name,
-                    "task": entry.kind,
+                    "task": resolved_task,
                     "name": entry.name,
                     "framework": entry.framework,
                     "signature": entry.signature_json,
-                    "hyperparams": run.hyperparams_json,
+                    "hyperparams": raw_hp,
+                    "hpo": run_hpo,
                 }
             ),
         }

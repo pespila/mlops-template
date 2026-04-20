@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,12 +59,21 @@ async def create_run(
         await db.flush()
         transform_config_id = tc.id
 
+    # Stash `task` + `hpo` inside `hyperparams_json` under reserved keys so
+    # the existing JSONB column carries them without a DB migration. The
+    # worker unpacks them when it builds MODEL_CATALOG for the trainer.
+    hp_payload: dict[str, Any] = dict(payload.hyperparams or {})
+    if payload.task is not None:
+        hp_payload["_task"] = payload.task
+    if payload.hpo is not None:
+        hp_payload["_hpo"] = payload.hpo.model_dump(mode="json")
+
     run = Run(
         experiment_id=payload.experiment_id,
         dataset_id=payload.dataset_id,
         transform_config_id=transform_config_id,
         model_catalog_id=payload.model_catalog_id,
-        hyperparams_json=payload.hyperparams,
+        hyperparams_json=hp_payload,
         resource_limits_json=payload.resource_limits,
         status="queued",
     )

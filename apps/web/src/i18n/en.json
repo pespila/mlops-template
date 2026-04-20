@@ -63,6 +63,7 @@
     "step3": "Features",
     "step4": "Target and split",
     "step5": "Model",
+    "step6": "Hyperparameters",
     "finish": "Start training →"
   },
   "deployments": {

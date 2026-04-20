@@ -63,6 +63,7 @@
     "step3": "Features",
     "step4": "Ziel und Split",
     "step5": "Modell",
+    "step6": "Hyperparameter",
     "finish": "Training starten →"
   },
   "deployments": {
