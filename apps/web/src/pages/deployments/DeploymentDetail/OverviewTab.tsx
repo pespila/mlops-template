@@ -39,14 +39,21 @@ export function OverviewTab({ deployment }: OverviewTabProps) {
 
   const body = useMemo(() => buildSampleBody(schema.data), [schema.data]);
 
+  // Build an absolute URL so curl / Python / JS snippets are copy-paste-ready.
+  // Falls back to a relative path during SSR / tests where `window` is absent.
+  const absoluteUrl = useMemo(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return origin ? `${origin}${deployment.url}` : deployment.url;
+  }, [deployment.url]);
+
   const snippets = useMemo(
     () =>
       buildSnippets({
-        url: deployment.url,
+        url: absoluteUrl,
         method: "POST",
         body,
       }),
-    [deployment.url, body],
+    [absoluteUrl, body],
   );
 
   return (
@@ -70,7 +77,7 @@ export function OverviewTab({ deployment }: OverviewTabProps) {
         <h2 className="font-display text-xl font-bold text-fg1">Endpoint URL</h2>
         <p className="mt-1 text-sm text-fg2">POST predictions to this address.</p>
         <div className="mt-3 rounded border border-[color:var(--border)] bg-teal-50 px-3 py-2 font-mono text-xs text-teal-900">
-          {deployment.url}
+          {absoluteUrl}
         </div>
       </GlassCard>
 
