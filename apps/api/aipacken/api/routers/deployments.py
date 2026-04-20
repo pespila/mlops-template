@@ -31,12 +31,18 @@ def _slugify(name: str) -> str:
     return f"{s}-{uuid.uuid4().hex[:8]}" if s else f"model-{uuid.uuid4().hex[:8]}"
 
 
+def _to_read(dep: Deployment) -> DeploymentRead:
+    out = DeploymentRead.model_validate(dep)
+    out.url = f"/api/deployments/{dep.id}/predict"
+    return out
+
+
 @router.post("", response_model=DeploymentRead, status_code=201)
 async def create_deployment(
     payload: DeploymentCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Deployment:
+) -> DeploymentRead:
     dep = Deployment(
         model_version_id=payload.model_version_id,
         name=payload.name,
@@ -49,7 +55,7 @@ async def create_deployment(
     await db.commit()
     await db.refresh(dep)
     await enqueue("deploy_model", dep.id)
-    return dep
+    return _to_read(dep)
 
 
 @router.get("", response_model=DeploymentList)
@@ -60,9 +66,7 @@ async def list_deployments(
         await db.execute(select(Deployment).order_by(Deployment.created_at.desc()))
     ).scalars().all()
     total = (await db.execute(select(func.count()).select_from(Deployment))).scalar_one()
-    return DeploymentList(
-        items=[DeploymentRead.model_validate(r) for r in rows], total=total
-    )
+    return DeploymentList(items=[_to_read(r) for r in rows], total=total)
 
 
 @router.get("/{deployment_id}", response_model=DeploymentRead)
@@ -70,11 +74,11 @@ async def get_deployment(
     deployment_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Deployment:
+) -> DeploymentRead:
     dep = await db.get(Deployment, deployment_id)
     if dep is None:
         raise HTTPException(status_code=404, detail="deployment_not_found")
-    return dep
+    return _to_read(dep)
 
 
 @router.patch("/{deployment_id}", response_model=DeploymentRead)
@@ -83,7 +87,7 @@ async def update_deployment(
     payload: DeploymentUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Deployment:
+) -> DeploymentRead:
     dep = await db.get(Deployment, deployment_id)
     if dep is None:
         raise HTTPException(status_code=404, detail="deployment_not_found")
@@ -96,7 +100,7 @@ async def update_deployment(
         dep.audit_payloads = payload.audit_payloads
     await db.commit()
     await db.refresh(dep)
-    return dep
+    return _to_read(dep)
 
 
 @router.delete("/{deployment_id}", status_code=204, response_class=Response)
@@ -223,7 +227,7 @@ async def get_deployment_logs(
 @router.post("/{deployment_id}/predict", response_model=PredictResponse)
 async def predict(
     deployment_id: str,
-    payload: PredictRequest,
+    payload: dict[str, Any],
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PredictResponse:
@@ -233,9 +237,13 @@ async def predict(
     if dep.status != "active" or not dep.internal_url:
         raise HTTPException(status_code=409, detail="deployment_not_ready")
 
+    # Accept either {inputs: {...}} or a flat {feature: value, ...} dict; the
+    # serving container's schema-driven Pydantic model expects the flat form.
+    forwarded: Any = payload.get("inputs") if "inputs" in payload else payload
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            r = await client.post(f"{dep.internal_url}/predict", json=payload.model_dump())
+            r = await client.post(f"{dep.internal_url}/predict", json=forwarded)
             r.raise_for_status()
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=f"serving_error: {exc}") from exc

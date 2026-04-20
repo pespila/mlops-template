@@ -15,14 +15,17 @@ interface DeploymentEndpointCardProps {
 function mapStatus(status: DeploymentRead["status"]): RunStatus {
   switch (status) {
     case "provisioning":
+    case "deploying":
       return "building";
     case "ready":
+    case "active":
       return "running";
     case "failed":
+    case "unhealthy":
       return "failed";
     case "stopping":
-      return "cancelled";
     case "stopped":
+    case "tearing_down":
       return "cancelled";
     default:
       return "queued";

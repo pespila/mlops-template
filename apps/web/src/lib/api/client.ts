@@ -220,9 +220,13 @@ export type DeploymentStatus =
 export interface DeploymentRead {
   id: string;
   name: string;
+  slug: string;
   model_version_id: string;
   status: DeploymentStatus;
+  /** Public-facing URL the external caller POSTs predictions to. */
   url: string;
+  endpoint_url: string | null;
+  internal_url: string | null;
   created_at: string;
   last_called_at: string | null;
 }

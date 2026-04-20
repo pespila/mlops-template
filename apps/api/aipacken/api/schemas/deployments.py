@@ -38,6 +38,11 @@ class DeploymentRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # UI-facing convenience field: the public URL external callers POST to.
+    # Populated by the router; not stored on the table.
+    url: str = ""
+    last_called_at: datetime | None = None
+
 
 class DeploymentList(BaseModel):
     items: list[DeploymentRead]
