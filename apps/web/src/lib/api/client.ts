@@ -153,7 +153,7 @@ export interface ExperimentRead {
   name: string;
   description: string | null;
   created_at: string;
-  run_count: number;
+  run_count?: number;
 }
 
 export type RunStatusValue =
@@ -169,13 +169,14 @@ export interface RunRead {
   experiment_id: string;
   dataset_id: string;
   model_catalog_id: string;
+  display_name: string | null;
   status: RunStatusValue;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
-  transform_config: Record<string, unknown>;
-  hyperparams: Record<string, unknown>;
-  primary_metric: { name: string; value: number } | null;
+  transform_config?: Record<string, unknown>;
+  hyperparams?: Record<string, unknown>;
+  primary_metric?: { name: string; value: number } | null;
 }
 
 export interface RunMetric {
@@ -203,6 +204,10 @@ export interface ModelVersionRead {
   storage_path: string | null;
   created_at: string;
   metrics?: Record<string, number>;
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  experiment_id?: string | null;
+  model_catalog_name?: string | null;
 }
 
 export type DeploymentStatus =
@@ -343,6 +348,13 @@ export const api = {
     get: (id: string) => apiFetch<ExperimentRead>(`/experiments/${encodeURIComponent(id)}`),
     create: (input: CreateExperimentInput) =>
       apiFetch<ExperimentRead>("/experiments", { method: "POST", body: input }),
+    update: (id: string, input: { name?: string; description?: string | null }) =>
+      apiFetch<ExperimentRead>(`/experiments/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: input,
+      }),
+    remove: (id: string) =>
+      apiFetch<void>(`/experiments/${encodeURIComponent(id)}`, { method: "DELETE" }),
   },
 
   runs: {
@@ -353,6 +365,10 @@ export const api = {
     create: (input: CreateRunInput) =>
       apiFetch<RunRead>("/runs", { method: "POST", body: input }),
     get: (id: string) => apiFetch<RunRead>(`/runs/${encodeURIComponent(id)}`),
+    update: (id: string, input: { display_name?: string | null }) =>
+      apiFetch<RunRead>(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: input }),
+    remove: (id: string) =>
+      apiFetch<void>(`/runs/${encodeURIComponent(id)}`, { method: "DELETE" }),
     metrics: (id: string) => apiFetch<RunMetric[]>(`/runs/${encodeURIComponent(id)}/metrics`),
     artifacts: (id: string) =>
       apiFetch<RunArtifact[]>(`/runs/${encodeURIComponent(id)}/artifacts`),
@@ -387,12 +403,20 @@ export const api = {
 
   models: {
     list: () =>
-      apiFetch<{ items: Array<{ id: string; name: string; latest_version: ModelVersionRead }> }>(
-        "/models",
-      ).then((r) => r.items ?? []),
+      apiFetch<{
+        items: Array<{ id: string; name: string; description: string | null; created_at: string }>;
+      }>("/models").then((r) => r.items ?? []),
     get: (id: string) =>
-      apiFetch<{ id: string; name: string; versions: ModelVersionRead[] }>(
+      apiFetch<{
+        id: string;
+        name: string;
+        description: string | null;
+        versions: ModelVersionRead[];
+      }>(`/models/${encodeURIComponent(id)}`),
+    update: (id: string, input: { name?: string; description?: string | null }) =>
+      apiFetch<{ id: string; name: string; description: string | null }>(
         `/models/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: input },
       ),
   },
 

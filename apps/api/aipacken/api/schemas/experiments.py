@@ -10,6 +10,11 @@ class ExperimentCreate(BaseModel):
     description: str | None = None
 
 
+class ExperimentUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
 class ExperimentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

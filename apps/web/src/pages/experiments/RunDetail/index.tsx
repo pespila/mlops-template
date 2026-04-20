@@ -1,9 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Download } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { RunStatusBadge } from "@/components/atoms/RunStatusBadge";
+import { EditableHeading } from "@/components/molecules/EditableHeading";
 import { GlassCard } from "@/components/molecules/GlassCard";
 import { LineageChip } from "@/components/molecules/LineageChip";
 import { MetricCard } from "@/components/molecules/MetricCard";
@@ -16,6 +17,8 @@ import { formatNumber, formatRelative } from "@/lib/format";
 
 export function RunDetail() {
   const { id = "" } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const [logsOpen, setLogsOpen] = useState(true);
 
   const run = useQuery({
@@ -23,6 +26,21 @@ export function RunDetail() {
     queryFn: () => api.runs.get(id),
     enabled: Boolean(id),
     refetchInterval: 5_000,
+  });
+
+  const rename = useMutation({
+    mutationFn: (name: string) => api.runs.update(id, { display_name: name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs", id] }),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.runs.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["runs"] });
+      qc.invalidateQueries({ queryKey: ["models"] });
+      const expId = run.data?.experiment_id;
+      navigate(expId ? `/experiments/${expId}` : "/experiments");
+    },
   });
 
   const metrics = useQuery({
@@ -122,9 +140,15 @@ export function RunDetail() {
       <header className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.data?.status ?? "queued"} />
-          <h1 className="font-display text-display-lg font-extrabold tracking-tight text-fg1">
-            Run {id.slice(0, 8)}
-          </h1>
+          <EditableHeading
+            className="flex-1"
+            value={run.data?.display_name || `Run ${id.slice(0, 8)}`}
+            onSave={(next) => rename.mutateAsync(next)}
+            onDelete={() => remove.mutateAsync()}
+            deleteConfirm="Delete this run, its metrics, artifacts, and any model versions it produced?"
+            saving={rename.isPending}
+            deleting={remove.isPending}
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-fg2">
           {run.data ? (

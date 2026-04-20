@@ -44,6 +44,54 @@ from aipacken.services.redis_client import publish
 logger = structlog.get_logger(__name__)
 
 
+async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
+    """Remove a Run, its on-disk data, and every ModelVersion it produced.
+
+    Metrics, Artifacts, ExplanationArtifact, and BiasReport rows cascade via
+    the FK `ondelete=CASCADE`. RegisteredModel rows are left alone when they
+    still have surviving versions; removed when this run's versions were the
+    last ones.
+    """
+    from sqlalchemy import select as _select
+
+    run = await db.get(Run, run_id)
+    if run is None:
+        return
+
+    mv_ids = (
+        await db.execute(_select(ModelVersion.id).where(ModelVersion.run_id == run_id))
+    ).scalars().all()
+    reg_ids: set[str] = set()
+    for mv_id in mv_ids:
+        mv = await db.get(ModelVersion, mv_id)
+        if mv is None:
+            continue
+        reg_ids.add(mv.registered_model_id)
+        mv_dir = storage.model_version_dir(mv_id)
+        if mv_dir.exists():
+            shutil.rmtree(mv_dir, ignore_errors=True)
+        await db.delete(mv)
+
+    await db.delete(run)
+    await db.flush()
+
+    # Drop RegisteredModel rows that no longer have any versions.
+    for reg_id in reg_ids:
+        remaining = (
+            await db.execute(
+                _select(ModelVersion.id).where(ModelVersion.registered_model_id == reg_id)
+            )
+        ).scalars().first()
+        if remaining is None:
+            reg = await db.get(RegisteredModel, reg_id)
+            if reg is not None:
+                await db.delete(reg)
+
+    run_root = storage.run_dir(run_id)
+    if run_root.exists():
+        shutil.rmtree(run_root, ignore_errors=True)
+
+
 async def _mark_run_failed(session_factory: Any, run_id: str, error: str) -> None:
     """Best-effort safety net — never leave a Run stuck in queued/running."""
     try:

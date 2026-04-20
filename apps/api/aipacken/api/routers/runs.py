@@ -11,6 +11,7 @@ from aipacken.api.schemas.runs import (
     RunCreate,
     RunList,
     RunRead,
+    RunUpdate,
 )
 from aipacken.db import get_db
 from aipacken.db.models import (
@@ -213,6 +214,23 @@ async def get_run_logs(
     return out
 
 
+@router.patch("/{run_id}", response_model=RunRead)
+async def update_run(
+    run_id: str,
+    payload: RunUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Run:
+    r = await db.get(Run, run_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    if payload.display_name is not None:
+        r.display_name = payload.display_name.strip() or None
+    await db.commit()
+    await db.refresh(r)
+    return r
+
+
 @router.post("/{run_id}/cancel", response_model=RunRead)
 async def cancel_run(
     run_id: str,
@@ -226,3 +244,15 @@ async def cancel_run(
     await db.commit()
     await db.refresh(r)
     return r
+
+
+@router.delete("/{run_id}", status_code=204)
+async def delete_run(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    from aipacken.jobs.tasks.train_run import cascade_delete_run_assets
+
+    await cascade_delete_run_assets(db, run_id)
+    await db.commit()

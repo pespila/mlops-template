@@ -21,6 +21,17 @@ class ModelVersionRead(BaseModel):
     serving_image_uri: str | None = None
     created_at: datetime
     updated_at: datetime
+    # Enriched fields — populated by the router, not stored on the table.
+    metrics: dict[str, float] = {}
+    dataset_id: str | None = None
+    dataset_name: str | None = None
+    experiment_id: str | None = None
+    model_catalog_name: str | None = None
+
+
+class ModelUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
 
 
 class RegisteredModelRead(BaseModel):

@@ -94,6 +94,7 @@ class Run(Base, IdMixin, TimestampsMixin):
     model_catalog_id: Mapped[str] = mapped_column(
         ForeignKey("model_catalog_entrys.id"), nullable=False
     )
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     container_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)

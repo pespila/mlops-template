@@ -103,10 +103,24 @@ def _append_metric(path: Path, name: str, value: float, step: int | None = None,
 
 def _feature_names(preprocessor: Any, fallback: list[str]) -> list[str]:
     try:
-        names = preprocessor.get_feature_names_out()
-        return [str(n) for n in names]
+        raw = [str(n) for n in preprocessor.get_feature_names_out()]
     except Exception:
         return fallback
+    return [_clean_feature_name(n) for n in raw]
+
+
+def _clean_feature_name(name: str) -> str:
+    """Strip sklearn ColumnTransformer's `<step>__<col>` prefixes.
+
+    ColumnTransformer emits feature names like ``2_standard_scale_age__age``.
+    Users care about the underlying column. If a transform expands one input
+    into many (one-hot), the expanded suffix after ``__`` is preserved
+    (e.g. ``sex__male`` becomes ``sex_male``).
+    """
+    base = name.split("__", 1)[-1] if "__" in name else name
+    # one-hot expansions often come back as `col_value` already; if the
+    # remaining half equals the step prefix, drop it.
+    return base
 
 
 def main() -> int:

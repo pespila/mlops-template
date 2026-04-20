@@ -18,6 +18,10 @@ class RunCreate(BaseModel):
     resource_limits: dict[str, Any] = {}
 
 
+class RunUpdate(BaseModel):
+    display_name: str | None = None
+
+
 class RunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
@@ -26,6 +30,7 @@ class RunRead(BaseModel):
     dataset_id: str
     transform_config_id: str
     model_catalog_id: str
+    display_name: str | None = None
     image_uri: str | None = None
     container_id: str | None = None
     status: str

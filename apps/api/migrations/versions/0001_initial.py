@@ -141,6 +141,7 @@ def upgrade() -> None:
             sa.ForeignKey("model_catalog_entrys.id"),
             nullable=False,
         ),
+        sa.Column("display_name", sa.String(length=255), nullable=True),
         sa.Column("image_uri", sa.String(length=512), nullable=True),
         sa.Column("container_id", sa.String(length=128), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="queued"),

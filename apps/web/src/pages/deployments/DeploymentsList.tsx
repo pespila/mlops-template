@@ -13,9 +13,16 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
   const t = useT();
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [modelId, setModelId] = useState("");
   const [modelVersionId, setModelVersionId] = useState("");
 
   const models = useQuery({ queryKey: ["models"], queryFn: () => api.models.list() });
+  const model = useQuery({
+    queryKey: ["models", modelId],
+    queryFn: () => api.models.get(modelId),
+    enabled: Boolean(modelId),
+  });
+
   const create = useMutation({
     mutationFn: () =>
       api.deployments.create({ model_version_id: modelVersionId, name: name.trim() }),
@@ -46,17 +53,38 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
       </label>
       <label className="flex flex-col gap-1.5">
         <span className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
-          Model version
+          Model
         </span>
         <select
-          value={modelVersionId}
-          onChange={(ev) => setModelVersionId(ev.target.value)}
+          value={modelId}
+          onChange={(ev) => {
+            setModelId(ev.target.value);
+            setModelVersionId("");
+          }}
           className="rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none"
         >
           <option value="">Select a model…</option>
           {(models.data ?? []).map((m) => (
-            <option key={m.latest_version.id} value={m.latest_version.id}>
-              {m.name} · v{m.latest_version.version}
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+          Version
+        </span>
+        <select
+          value={modelVersionId}
+          onChange={(ev) => setModelVersionId(ev.target.value)}
+          disabled={!modelId || !model.data}
+          className="rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none disabled:opacity-50"
+        >
+          <option value="">Select a version…</option>
+          {(model.data?.versions ?? []).map((v) => (
+            <option key={v.id} value={v.id}>
+              v{v.version} · {v.model_kind}
             </option>
           ))}
         </select>
