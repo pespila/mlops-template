@@ -218,30 +218,46 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             await db.commit()
             return {"status": "failed", "exit_code": exit_code}
 
-        # Success path: sync metrics + model from MLflow into our own tables.
-        if mlflow_run_id:
-            try:
-                from aipacken.services.mlflow_client import get_mlflow_client
+        # Success path. Each sync step is committed independently so a
+        # later failure doesn't roll back earlier successes (metrics
+        # survive even if artifact mirror or ModelVersion registration
+        # fails).
+        run.status = "succeeded"
+        run.finished_at = datetime.now(timezone.utc)
+        await db.commit()
 
-                mc = get_mlflow_client()
+    if mlflow_run_id:
+        from aipacken.services.mlflow_client import get_mlflow_client
+
+        mc = get_mlflow_client()
+
+        # Step 1: metrics
+        try:
+            mlflow_run = mc.get_run(mlflow_run_id)
+            metrics_items = list((mlflow_run.data.metrics or {}).items())
+            async with session_factory() as db2:
+                for name, value in metrics_items:
+                    db2.add(Metric(run_id=run_id, name=name, value=float(value)))
+                await db2.commit()
+        except Exception as exc:
+            logger.warning("train_run.metric_sync_failed", error=str(exc))
+            mlflow_run = None
+
+        # Step 2: model pointer + artifact mirror
+        artifact_uri = None
+        try:
+            if mlflow_run is None:
                 mlflow_run = mc.get_run(mlflow_run_id)
-                for name, value in (mlflow_run.data.metrics or {}).items():
-                    db.add(Metric(run_id=run_id, name=name, value=float(value)))
-
-                artifact_uri = mlflow_run.info.artifact_uri
-                model_uri = f"{artifact_uri}/model"
-                db.add(
+            artifact_uri = mlflow_run.info.artifact_uri
+            async with session_factory() as db2:
+                db2.add(
                     Artifact(
                         run_id=run_id,
                         kind="model",
-                        uri=model_uri,
+                        uri=f"{artifact_uri}/model",
                         content_type="application/x-mlflow-pyfunc",
                     )
                 )
-
-                # Mirror every MLflow artifact (shap png, bias png, schema
-                # json, leaderboard, etc.) into our Artifact table so
-                # RunDetail lists them without hitting MLflow.
                 try:
                     for art in mc.list_artifacts(mlflow_run_id):
                         if art.path == "model":
@@ -256,7 +272,7 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                             kind = "schema"
                         elif lname.endswith("leaderboard.json"):
                             kind = "leaderboard"
-                        db.add(
+                        db2.add(
                             Artifact(
                                 run_id=run_id,
                                 kind=kind,
@@ -266,75 +282,77 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                         )
                 except Exception as exc:
                     logger.warning("train_run.list_artifacts_failed", error=str(exc))
+                await db2.commit()
+        except Exception as exc:
+            logger.warning("train_run.artifact_sync_failed", error=str(exc))
 
-                # Download + persist SHAP + bias JSON into platform tables so
-                # the RunDetail charts render without talking to MLflow.
-                try:
-                    import json as _json
-                    import tempfile as _tempfile
-                    from pathlib import Path as _Path
+        # Step 3: SHAP JSON
+        try:
+            import json as _json
+            import tempfile as _tempfile
+            from pathlib import Path as _Path
 
-                    from aipacken.db.models import BiasReport, ExplanationArtifact
+            from aipacken.db.models import ExplanationArtifact
 
-                    with _tempfile.TemporaryDirectory() as tmp:
-                        try:
-                            shap_path = mc.download_artifacts(
-                                mlflow_run_id, "shap_report.json", tmp
-                            )
-                            shap_doc = _json.loads(_Path(shap_path).read_text())
-                            db.add(
-                                ExplanationArtifact(
-                                    run_id=run_id,
-                                    kind="shap_global",
-                                    feature_importance_json=shap_doc.get(
-                                        "global_importance", {}
-                                    ),
-                                    artifact_uri=f"{artifact_uri}/shap_report.json",
-                                )
-                            )
-                        except Exception as exc:
-                            logger.info("train_run.shap_json_absent", error=str(exc))
+            with _tempfile.TemporaryDirectory() as tmp:
+                shap_path = mc.download_artifacts(mlflow_run_id, "shap_report.json", tmp)
+                shap_doc = _json.loads(_Path(shap_path).read_text())
+                async with session_factory() as db2:
+                    db2.add(
+                        ExplanationArtifact(
+                            run_id=run_id,
+                            kind="shap_global",
+                            feature_importance_json=shap_doc.get("global_importance", {}),
+                            artifact_uri=(
+                                f"{artifact_uri}/shap_report.json" if artifact_uri else None
+                            ),
+                        )
+                    )
+                    await db2.commit()
+        except Exception as exc:
+            logger.info("train_run.shap_json_absent", error=str(exc))
 
-                        try:
-                            bias_path = mc.download_artifacts(
-                                mlflow_run_id, "bias_report.json", tmp
-                            )
-                            bias_doc = _json.loads(_Path(bias_path).read_text())
-                            groups = bias_doc.get("groups") or {}
-                            overall = bias_doc.get("overall")
-                            overall_scalar = None
-                            if isinstance(overall, (int, float)):
-                                overall_scalar = float(overall)
-                            # One row per sensitive_feature grouping.
-                            # Our current trainer flattens to a single group set
-                            # keyed by value tuple; emit a single BiasReport row.
-                            db.add(
-                                BiasReport(
-                                    run_id=run_id,
-                                    sensitive_feature=",".join(
-                                        sorted(groups.keys())[:5]
-                                    )
-                                    or "combined",
-                                    metric_name=str(bias_doc.get("metric") or "accuracy"),
-                                    group_values_json={
-                                        "groups": groups,
-                                        "deltas": bias_doc.get("deltas") or {},
-                                        "overall": overall,
-                                    },
-                                    overall_value=overall_scalar,
-                                )
-                            )
-                        except Exception as exc:
-                            logger.info("train_run.bias_json_absent", error=str(exc))
-                except Exception as exc:
-                    logger.warning("train_run.report_ingest_failed", error=str(exc))
+        # Step 4: bias JSON
+        try:
+            import json as _json
+            import tempfile as _tempfile
+            from pathlib import Path as _Path
 
-                # Register a platform-side ModelVersion so the Deploy button appears.
+            from aipacken.db.models import BiasReport
+
+            with _tempfile.TemporaryDirectory() as tmp:
+                bias_path = mc.download_artifacts(mlflow_run_id, "bias_report.json", tmp)
+                bias_doc = _json.loads(_Path(bias_path).read_text())
+                groups = bias_doc.get("groups") or {}
+                overall = bias_doc.get("overall")
+                overall_scalar = float(overall) if isinstance(overall, (int, float)) else None
+                async with session_factory() as db2:
+                    db2.add(
+                        BiasReport(
+                            run_id=run_id,
+                            sensitive_feature=",".join(sorted(groups.keys())[:5])
+                            or "combined",
+                            metric_name=str(bias_doc.get("metric") or "accuracy"),
+                            group_values_json={
+                                "groups": groups,
+                                "deltas": bias_doc.get("deltas") or {},
+                                "overall": overall,
+                            },
+                            overall_value=overall_scalar,
+                        )
+                    )
+                    await db2.commit()
+        except Exception as exc:
+            logger.info("train_run.bias_json_absent", error=str(exc))
+
+        # Step 5: RegisteredModel + ModelVersion
+        try:
+            async with session_factory() as db2:
                 model_name = f"{entry.name}-run-{run_id[:8]}"
                 reg = RegisteredModel(name=model_name, description=entry.description)
-                db.add(reg)
-                await db.flush()
-                db.add(
+                db2.add(reg)
+                await db2.flush()
+                db2.add(
                     ModelVersion(
                         registered_model_id=reg.id,
                         run_id=run_id,
@@ -344,12 +362,9 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                         output_schema_json={},
                     )
                 )
-            except Exception as exc:
-                logger.warning("train_run.mlflow_sync_failed", error=str(exc))
-
-        run.status = "succeeded"
-        run.finished_at = datetime.now(timezone.utc)
-        await db.commit()
+                await db2.commit()
+        except Exception as exc:
+            logger.warning("train_run.model_register_failed", error=str(exc))
 
     await enqueue("analyze_run", run_id)
     return {"status": "succeeded", "run_id": run_id, "exit_code": exit_code}

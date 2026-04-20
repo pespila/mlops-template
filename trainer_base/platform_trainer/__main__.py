@@ -257,27 +257,33 @@ def main() -> int:
         bias_uri = _maybe_upload(Path("/tmp/bias.png"), "bias")
 
         # Log JSON payloads for the frontend SHAP bar chart + bias table.
-        # log_dict is a single REST call to MLflow — no dep on flask.
+        # Use the explicit-run-id client API so we don't open a second
+        # MLflow run (which happened with the fluent start_run approach
+        # when the outer run had already been closed by log_run).
         try:
-            import mlflow as _mlflow
+            import tempfile as _tempfile
+            from pathlib import Path as _Path
 
+            from mlflow.tracking import MlflowClient as _MlflowClient
+
+            mlflow_run_id_env = os.environ.get("MLFLOW_RUN_ID", "").strip()
             tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-            if tracking_uri:
-                _mlflow.set_tracking_uri(tracking_uri)
-            active = _mlflow.active_run()
-            mlflow_run_id_env = os.environ.get("MLFLOW_RUN_ID") or run_id
-            _ctx = _mlflow.start_run(run_id=mlflow_run_id_env) if active is None else None
-            try:
-                if shap_report:
-                    payload = {
-                        "global_importance": shap_report.get("global_importance", {}),
-                    }
-                    _mlflow.log_dict(payload, "shap_report.json")
-                if bias_report:
-                    _mlflow.log_dict(bias_report, "bias_report.json")
-            finally:
-                if _ctx is not None:
-                    _mlflow.end_run()
+            if mlflow_run_id_env and (shap_report or bias_report):
+                _mc = _MlflowClient(tracking_uri=tracking_uri) if tracking_uri else _MlflowClient()
+                with _tempfile.TemporaryDirectory() as tmp:
+                    if shap_report:
+                        shap_file = _Path(tmp) / "shap_report.json"
+                        shap_file.write_text(
+                            json.dumps(
+                                {"global_importance": shap_report.get("global_importance", {})},
+                                default=str,
+                            )
+                        )
+                        _mc.log_artifact(mlflow_run_id_env, str(shap_file))
+                    if bias_report:
+                        bias_file = _Path(tmp) / "bias_report.json"
+                        bias_file.write_text(json.dumps(bias_report, default=str))
+                        _mc.log_artifact(mlflow_run_id_env, str(bias_file))
         except Exception as exc:
             logger.warning("mlflow.log_reports_failed", extra={"error": str(exc)})
 
