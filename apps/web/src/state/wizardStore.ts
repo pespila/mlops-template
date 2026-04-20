@@ -27,6 +27,7 @@ export interface WizardState {
   datasetId: string | null;
   transforms: FeatureTransform[];
   target: string | null;
+  sensitiveFeatures: string[];
   split: TrainValTestSplit;
   modelCatalogId: string | null;
   hyperparams: Record<string, unknown>;
@@ -38,6 +39,8 @@ export interface WizardState {
   setTransforms: (t: FeatureTransform[]) => void;
   setTransform: (feature: string, kind: FeatureTransformKind) => void;
   setTarget: (t: string | null) => void;
+  setSensitiveFeatures: (cols: string[]) => void;
+  toggleSensitiveFeature: (col: string) => void;
   setSplit: (s: TrainValTestSplit) => void;
   setModelCatalogId: (id: string | null) => void;
   setHyperparams: (h: Record<string, unknown>) => void;
@@ -57,6 +60,8 @@ const INITIAL: Omit<
   | "setTransforms"
   | "setTransform"
   | "setTarget"
+  | "setSensitiveFeatures"
+  | "toggleSensitiveFeature"
   | "setSplit"
   | "setModelCatalogId"
   | "setHyperparams"
@@ -70,6 +75,7 @@ const INITIAL: Omit<
   datasetId: null,
   transforms: [],
   target: null,
+  sensitiveFeatures: [],
   split: DEFAULT_SPLIT,
   modelCatalogId: null,
   hyperparams: {},
@@ -91,6 +97,13 @@ export const useWizardStore = create<WizardState>()(
           return { transforms: next };
         }),
       setTarget: (target) => set({ target }),
+      setSensitiveFeatures: (sensitiveFeatures) => set({ sensitiveFeatures }),
+      toggleSensitiveFeature: (col) =>
+        set((state) => ({
+          sensitiveFeatures: state.sensitiveFeatures.includes(col)
+            ? state.sensitiveFeatures.filter((c) => c !== col)
+            : [...state.sensitiveFeatures, col],
+        })),
       setSplit: (split) => set({ split }),
       setModelCatalogId: (modelCatalogId) => set({ modelCatalogId }),
       setHyperparams: (hyperparams) => set({ hyperparams }),

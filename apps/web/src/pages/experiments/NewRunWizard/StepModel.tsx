@@ -70,6 +70,7 @@ export function StepModel() {
   const datasetId = useWizardStore((s) => s.datasetId);
   const transforms = useWizardStore((s) => s.transforms);
   const target = useWizardStore((s) => s.target);
+  const sensitiveFeatures = useWizardStore((s) => s.sensitiveFeatures);
   const split = useWizardStore((s) => s.split);
   const modelCatalogId = useWizardStore((s) => s.modelCatalogId);
   const setModelCatalogId = useWizardStore((s) => s.setModelCatalogId);
@@ -118,10 +119,39 @@ export function StepModel() {
         });
         expId = exp.id;
       }
+
+      // UI kind → backend op. The backend's build_column_transformer applies
+      // sensible defaults for columns it doesn't see here, so we only send
+      // entries that deviate from the default ("keep" is a no-op).
+      const kindToOp: Record<string, string> = {
+        drop: "drop",
+        standardize: "standard_scale",
+        "one-hot": "one_hot",
+        "impute-mean": "impute_mean",
+        "impute-median": "impute_median",
+        "impute-mode": "impute_mode",
+      };
+      const transformList = transforms
+        .filter((t) => t.feature !== target && kindToOp[t.kind])
+        .map((t) => ({ column: t.feature, op: kindToOp[t.kind] }));
+
+      // Split slider stores 0–100 ints; the trainer normalizes but fractions
+      // are the on-wire convention we want to settle on.
+      const splitFractions = {
+        train: split.train / 100,
+        val: split.val / 100,
+        test: split.test / 100,
+      };
+
       const run = await api.runs.create({
         experiment_id: expId,
         dataset_id: datasetId,
-        transform_config: { target, split, features: transforms },
+        transform_config: {
+          target,
+          transforms: transformList,
+          split: splitFractions,
+          sensitive_features: sensitiveFeatures,
+        },
         model_catalog_id: modelCatalogId,
         hyperparams,
       });

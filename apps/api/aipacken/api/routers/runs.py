@@ -41,12 +41,14 @@ async def create_run(
                 status_code=422,
                 detail="either transform_config_id or transform_config must be provided",
             )
+        sens = payload.transform_config.get("sensitive_features") or []
         tc = TransformConfig(
             dataset_id=payload.dataset_id,
             user_id=user.id,
             target_column=str(payload.transform_config.get("target", "")),
             transforms_json=payload.transform_config.get("transforms") or [],
             split_json=payload.transform_config.get("split") or {},
+            sensitive_features=[str(c) for c in sens] if isinstance(sens, list) else [],
         )
         db.add(tc)
         await db.flush()

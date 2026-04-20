@@ -9,6 +9,8 @@ export function StepTargetSplit() {
   const datasetId = useWizardStore((s) => s.datasetId);
   const target = useWizardStore((s) => s.target);
   const setTarget = useWizardStore((s) => s.setTarget);
+  const sensitiveFeatures = useWizardStore((s) => s.sensitiveFeatures);
+  const toggleSensitive = useWizardStore((s) => s.toggleSensitiveFeature);
   const split = useWizardStore((s) => s.split);
   const setSplit = useWizardStore((s) => s.setSplit);
   const prev = useWizardStore((s) => s.prev);
@@ -48,6 +50,38 @@ export function StepTargetSplit() {
           ))}
         </select>
       </label>
+
+      <div className="flex flex-col gap-2">
+        <span className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+          Sensitive features (optional)
+        </span>
+        <p className="text-xs text-fg3">
+          Pick columns to compute a per-group bias report against. Leave empty to skip.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {(schema.data ?? [])
+            .filter((c) => c.name !== target)
+            .map((c) => {
+              const on = sensitiveFeatures.includes(c.name);
+              return (
+                <button
+                  key={c.name}
+                  type="button"
+                  onClick={() => toggleSensitive(c.name)}
+                  className={
+                    "rounded-pill border px-3 py-1 text-xs transition-colors " +
+                    (on
+                      ? "border-primary bg-[color:var(--primary-soft)] text-primary"
+                      : "border-[color:var(--border)] bg-bg text-fg2 hover:text-fg1")
+                  }
+                >
+                  {c.name}
+                  <span className="ml-1 text-[10px] text-fg3">· {c.type}</span>
+                </button>
+              );
+            })}
+        </div>
+      </div>
 
       <div>
         <span className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">

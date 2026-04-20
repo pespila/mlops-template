@@ -55,6 +55,8 @@ def _step_for_op(op: str, params: dict[str, Any]) -> Any:
             handle_unknown=params.get("handle_unknown", "use_encoded_value"),
             unknown_value=params.get("unknown_value", -1),
         )
+    if op == "impute_mean":
+        return SimpleImputer(strategy="mean")
     if op == "impute_median":
         return SimpleImputer(strategy="median")
     if op == "impute_mode":
