@@ -435,6 +435,10 @@ export const api = {
       apiFetch<void>(`/deployments/${encodeURIComponent(id)}`, { method: "DELETE" }),
     schema: (id: string) =>
       apiFetch<JsonSchema>(`/deployments/${encodeURIComponent(id)}/schema`),
+    logs: (id: string, tail: number = 500) =>
+      apiFetch<Array<{ ts: string; level: string; message: string }>>(
+        `/deployments/${encodeURIComponent(id)}/logs?tail=${tail}`,
+      ),
     predict: (id: string, body: Record<string, unknown>) =>
       apiFetch<PredictionResponse>(`/deployments/${encodeURIComponent(id)}/predict`, {
         method: "POST",

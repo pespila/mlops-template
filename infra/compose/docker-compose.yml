@@ -10,8 +10,12 @@ x-api-common: &api-common
       condition: service_healthy
     redis:
       condition: service_started
+  # api + worker + builder all attach to both networks. models-net is only
+  # used to reach per-deployment serving containers by name; platform-net
+  # carries everything else (postgres, redis, builder-to-api).
   networks:
     - platform-net
+    - models-net
   volumes:
     - platform-data:/var/platform-data
 

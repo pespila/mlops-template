@@ -102,6 +102,8 @@ class RunRequest(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
     mounts: list[VolumeMount] = Field(default_factory=list)
     user: str | None = "10001:10001"
+    name: str | None = None
+    hostname: str | None = None
 
 
 class RunResponse(BaseModel):
@@ -132,6 +134,8 @@ async def run_container(req: RunRequest) -> RunResponse:
             mem_limit=req.memory_bytes,
             nano_cpus=req.nano_cpus,
             mounts=mounts,
+            name=req.name,
+            hostname=req.hostname,
         )
     except ImageNotFound as exc:
         raise HTTPException(status_code=404, detail=f"image_not_found: {req.image}") from exc
@@ -179,6 +183,19 @@ async def wait_container(container_id: str) -> dict[str, Any]:
         "container_id": container_id,
         "exit_code": int(result.get("StatusCode", -1)) if isinstance(result, dict) else -1,
     }
+
+
+@app.get("/logs/{container_id}")
+async def get_logs(container_id: str, tail: int = 500) -> dict[str, Any]:
+    """Return the last *tail* lines of a container's stdout/stderr."""
+    client = get_docker()
+    try:
+        container = client.containers.get(container_id)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail="container_not_found") from exc
+    raw = container.logs(stdout=True, stderr=True, tail=tail)
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+    return {"container_id": container_id, "lines": text.splitlines()}
 
 
 @app.get("/logs/{container_id}/stream")

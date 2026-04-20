@@ -41,6 +41,8 @@ class BuilderClient:
         labels: dict[str, str] | None = None,
         mounts: list[dict[str, Any]] | None = None,
         user: str | None = "10001:10001",
+        name: str | None = None,
+        hostname: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "image": image,
@@ -52,9 +54,17 @@ class BuilderClient:
             "labels": labels or {},
             "mounts": mounts or [],
             "user": user,
+            "name": name,
+            "hostname": hostname,
         }
         async with self._client() as c:
             r = await c.post("/run", json=payload)
+            r.raise_for_status()
+            return r.json()
+
+    async def logs(self, container_id: str, tail: int = 500) -> dict[str, Any]:
+        async with self._client() as c:
+            r = await c.get(f"/logs/{container_id}", params={"tail": tail})
             r.raise_for_status()
             return r.json()
 

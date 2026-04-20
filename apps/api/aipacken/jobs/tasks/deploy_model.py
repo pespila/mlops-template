@@ -52,6 +52,7 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
         }
 
         builder = get_builder_client()
+        container_name = f"model-{dep.slug}"
         try:
             res = await builder.run(
                 image=image,
@@ -67,6 +68,8 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
                         "read_only": True,
                     }
                 ],
+                name=container_name,
+                hostname=container_name,
             )
         except Exception as exc:
             logger.exception("deploy_model.run_failed")

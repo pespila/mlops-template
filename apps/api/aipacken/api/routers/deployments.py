@@ -171,6 +171,55 @@ async def get_deployment_schema(
     return {"type": "object", "properties": {}, "additionalProperties": True}
 
 
+@router.get("/{deployment_id}/logs")
+async def get_deployment_logs(
+    deployment_id: str,
+    tail: int = 500,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, str]]:
+    """Tail of the serving container's stdout/stderr, shaped for the UI."""
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+
+    dep = await db.get(Deployment, deployment_id)
+    if dep is None:
+        raise HTTPException(status_code=404, detail="deployment_not_found")
+    if not dep.container_id:
+        return []
+
+    from aipacken.docker_client.builder_client import get_builder_client
+
+    try:
+        res = await get_builder_client().logs(dep.container_id, tail=tail)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"builder_unreachable: {exc}") from exc
+
+    out: list[dict[str, str]] = []
+    for raw in res.get("lines", []):
+        raw = str(raw).strip()
+        if not raw:
+            continue
+        if raw.startswith("{"):
+            try:
+                parsed = _json.loads(raw)
+                if isinstance(parsed, dict):
+                    out.append(
+                        {
+                            "ts": str(parsed.get("ts") or parsed.get("timestamp") or _dt.now(_tz.utc).isoformat()),
+                            "level": str(parsed.get("level") or "info").lower(),
+                            "message": str(parsed.get("message") or parsed.get("event") or raw),
+                        }
+                    )
+                    continue
+            except _json.JSONDecodeError:
+                pass
+        upper = raw.upper()
+        level = "error" if "ERROR" in upper else ("warn" if "WARN" in upper else "info")
+        out.append({"ts": _dt.now(_tz.utc).isoformat(), "level": level, "message": raw})
+    return out
+
+
 @router.post("/{deployment_id}/predict", response_model=PredictResponse)
 async def predict(
     deployment_id: str,
