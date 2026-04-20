@@ -57,5 +57,7 @@ class PredictResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     prediction: Any
+    prediction_label: str | None = None
+    target_classes: list[str] | None = None
     model_version: str | None = None
     trace_id: str | None = None

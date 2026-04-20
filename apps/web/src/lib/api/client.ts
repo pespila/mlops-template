@@ -233,6 +233,8 @@ export interface DeploymentRead {
 
 export interface PredictionResponse {
   prediction: unknown;
+  prediction_label?: string | null;
+  target_classes?: string[] | null;
   model_version: string;
   trace_id: string;
 }

@@ -1,8 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { CodeSnippetTabs } from "@/components/molecules/CodeSnippetTabs";
 import { GlassCard } from "@/components/molecules/GlassCard";
-import type { DeploymentRead } from "@/lib/api/client";
+import { api, type DeploymentRead, type JsonSchema } from "@/lib/api/client";
 import { buildSnippets } from "@/lib/codegen/snippets";
 import { formatRelative } from "@/lib/format";
 
@@ -10,15 +11,42 @@ interface OverviewTabProps {
   deployment: DeploymentRead;
 }
 
+function sampleValueForProp(spec: JsonSchema | undefined): unknown {
+  if (!spec || typeof spec !== "object") return 0;
+  if (Array.isArray(spec.enum) && spec.enum.length > 0) return spec.enum[0];
+  const t = Array.isArray(spec.type) ? spec.type.find((x) => x !== "null") : spec.type;
+  if (t === "integer") return 0;
+  if (t === "number") return 0.0;
+  if (t === "boolean") return false;
+  return "";
+}
+
+function buildSampleBody(schema: JsonSchema | undefined): Record<string, unknown> {
+  if (!schema || !schema.properties) return { feature_a: 1.23, feature_b: "value" };
+  const out: Record<string, unknown> = {};
+  for (const [name, spec] of Object.entries(schema.properties)) {
+    out[name] = sampleValueForProp(spec);
+  }
+  return out;
+}
+
 export function OverviewTab({ deployment }: OverviewTabProps) {
+  const schema = useQuery({
+    queryKey: ["deployments", deployment.id, "schema"],
+    queryFn: () => api.deployments.schema(deployment.id),
+    enabled: Boolean(deployment.id),
+  });
+
+  const body = useMemo(() => buildSampleBody(schema.data), [schema.data]);
+
   const snippets = useMemo(
     () =>
       buildSnippets({
         url: deployment.url,
         method: "POST",
-        body: { feature_a: 1.23, feature_b: "value" },
+        body,
       }),
-    [deployment.url],
+    [deployment.url, body],
   );
 
   return (
@@ -48,6 +76,13 @@ export function OverviewTab({ deployment }: OverviewTabProps) {
 
       <GlassCard>
         <h2 className="font-display text-xl font-bold text-fg1">Call from your code</h2>
+        <p className="mt-1 text-sm text-fg2">
+          {schema.data
+            ? "Body is prefilled with one entry per feature from your model's input schema."
+            : schema.isPending
+              ? "Loading schema…"
+              : "Using a generic example body."}
+        </p>
         <div className="mt-3">
           <CodeSnippetTabs snippets={snippets} />
         </div>

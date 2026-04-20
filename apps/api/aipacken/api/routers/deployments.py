@@ -251,6 +251,8 @@ async def predict(
 
     return PredictResponse(
         prediction=body.get("prediction"),
+        prediction_label=body.get("prediction_label"),
+        target_classes=body.get("target_classes"),
         model_version=body.get("model_version"),
         trace_id=body.get("trace_id"),
     )

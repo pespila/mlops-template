@@ -158,8 +158,11 @@ def main() -> int:
         logger.info("task.inferred", extra={"task": task, "rows": len(df)})
 
         # Auto label-encode non-numeric classification targets so every adapter
-        # (XGBoost/LightGBM/AutoGluon/sklearn) sees numeric y.
+        # (XGBoost/LightGBM/AutoGluon/sklearn) sees numeric y. Capture the
+        # class labels either way so serving can map integer predictions
+        # back to a human-readable string.
         target_classes: list[str] | None = None
+        target_encoded: bool = False
         if task == "classification":
             y_series = df[target]
             if not pd.api.types.is_numeric_dtype(y_series) or pd.api.types.is_bool_dtype(y_series):
@@ -168,10 +171,16 @@ def main() -> int:
                 target_label_encoder = LabelEncoder().fit(y_series)
                 df[target] = target_label_encoder.transform(y_series)
                 target_classes = [str(c) for c in target_label_encoder.classes_]
+                target_encoded = True
                 logger.info(
                     "target.label_encoded",
                     extra={"classes": target_classes, "n": len(target_classes)},
                 )
+            else:
+                # Numeric target — still record the unique values so the UI
+                # can show "0 = 0, 1 = 1, …" context alongside the prediction.
+                uniques = sorted(y_series.dropna().unique().tolist())
+                target_classes = [str(v) for v in uniques]
 
         X_train, X_val, X_test, y_train, y_val, y_test = transforms.apply_split(
             df,
@@ -318,6 +327,7 @@ def main() -> int:
                 "flavor": flavor,
                 "target": target,
                 "target_classes": target_classes,
+                "target_encoded": target_encoded,
             }
             (artifacts_dir / "input_schema.json").write_text(json.dumps(schema_doc))
         except Exception as exc:

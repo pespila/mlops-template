@@ -63,10 +63,31 @@ export function TestTab({ deploymentId }: TestTabProps) {
           </p>
         ) : null}
         {response ? (
-          <div className="mt-3 overflow-hidden rounded border border-[color:var(--border)] bg-teal-50">
-            <pre className="m-0 overflow-x-auto p-4 font-mono text-xs text-teal-900">
-              {JSON.stringify(response, null, 2)}
-            </pre>
+          <div className="mt-3 flex flex-col gap-3">
+            {response.prediction_label ? (
+              <div className="rounded border border-primary bg-[color:var(--primary-soft)] px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+                  Predicted label
+                </div>
+                <div className="mt-1 font-display text-2xl font-bold text-primary">
+                  {response.prediction_label}
+                </div>
+                <div className="mt-1 font-mono text-[11px] text-fg3">
+                  raw output: {String(response.prediction)}
+                </div>
+              </div>
+            ) : null}
+            {response.target_classes && response.target_classes.length > 0 ? (
+              <div className="text-xs text-fg3">
+                <span className="font-semibold uppercase tracking-[0.08em]">Classes:</span>{" "}
+                {response.target_classes.join(" · ")}
+              </div>
+            ) : null}
+            <div className="overflow-hidden rounded border border-[color:var(--border)] bg-teal-50">
+              <pre className="m-0 overflow-x-auto p-4 font-mono text-xs text-teal-900">
+                {JSON.stringify(response, null, 2)}
+              </pre>
+            </div>
           </div>
         ) : !errorText ? (
           <p className="mt-3 text-sm text-fg3">No response yet. Submit the form to test.</p>

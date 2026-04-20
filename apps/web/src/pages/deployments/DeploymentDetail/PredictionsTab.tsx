@@ -56,7 +56,7 @@ export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
                 >
                   <td className="px-6 py-3 text-xs text-fg2">{formatRelative(row.ts)}</td>
                   <td className="px-6 py-3 font-mono text-xs text-fg2">
-                    {row.trace_id.slice(0, 8)}
+                    {row.trace_id ? row.trace_id.slice(0, 8) : "—"}
                   </td>
                   <td className="px-6 py-3 font-mono text-xs text-fg1">
                     {typeof row.output === "string" || typeof row.output === "number"
@@ -103,7 +103,11 @@ export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
       <Modal
         open={Boolean(selected)}
         onClose={() => setSelected(null)}
-        title={selected ? `Prediction ${selected.trace_id.slice(0, 8)}` : "Prediction"}
+        title={
+          selected
+            ? `Prediction ${selected.trace_id ? selected.trace_id.slice(0, 8) : selected.id.slice(0, 8)}`
+            : "Prediction"
+        }
       >
         {selected ? (
           <div className="flex flex-col gap-4">
