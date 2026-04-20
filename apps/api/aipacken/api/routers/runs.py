@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -246,13 +246,14 @@ async def cancel_run(
     return r
 
 
-@router.delete("/{run_id}", status_code=204)
+@router.delete("/{run_id}", status_code=204, response_class=Response)
 async def delete_run(
     run_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     from aipacken.jobs.tasks.train_run import cascade_delete_run_assets
 
     await cascade_delete_run_assets(db, run_id)
     await db.commit()
+    return Response(status_code=204)

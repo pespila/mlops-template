@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,12 +76,12 @@ async def update_experiment(
     return exp
 
 
-@router.delete("/{experiment_id}", status_code=204)
+@router.delete("/{experiment_id}", status_code=204, response_class=Response)
 async def delete_experiment(
     experiment_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> None:
+) -> Response:
     exp = await db.get(Experiment, experiment_id)
     if exp is None:
         raise HTTPException(status_code=404, detail="experiment_not_found")
@@ -95,3 +95,4 @@ async def delete_experiment(
 
     await db.delete(exp)
     await db.commit()
+    return Response(status_code=204)
