@@ -10,6 +10,21 @@ interface PredictionsTabProps {
   deploymentId: string;
 }
 
+function shortTrace(row: PredictionLogEntry): string {
+  return (row.trace_id ?? row.id ?? "").slice(0, 8) || "—";
+}
+
+function outputPreview(row: PredictionLogEntry): string {
+  const out = row.output_preview_json;
+  if (out === null || out === undefined) return "—";
+  if (typeof out === "string" || typeof out === "number") return String(out);
+  try {
+    return JSON.stringify(out).slice(0, 60);
+  } catch {
+    return String(out);
+  }
+}
+
 export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<PredictionLogEntry | null>(null);
@@ -40,6 +55,9 @@ export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
                   Trace
                 </th>
                 <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
                   Prediction
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
@@ -54,17 +72,16 @@ export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
                   className="cursor-pointer hover:bg-bg-muted/60"
                   onClick={() => setSelected(row)}
                 >
-                  <td className="px-6 py-3 text-xs text-fg2">{formatRelative(row.ts)}</td>
-                  <td className="px-6 py-3 font-mono text-xs text-fg2">
-                    {row.trace_id ? row.trace_id.slice(0, 8) : "—"}
+                  <td className="px-6 py-3 text-xs text-fg2">
+                    {row.received_at ? formatRelative(row.received_at) : "—"}
                   </td>
-                  <td className="px-6 py-3 font-mono text-xs text-fg1">
-                    {typeof row.output === "string" || typeof row.output === "number"
-                      ? String(row.output)
-                      : JSON.stringify(row.output).slice(0, 40)}
-                  </td>
+                  <td className="px-6 py-3 font-mono text-xs text-fg2">{shortTrace(row)}</td>
+                  <td className="px-6 py-3 font-mono text-xs text-fg2">{row.status_code}</td>
+                  <td className="px-6 py-3 font-mono text-xs text-fg1">{outputPreview(row)}</td>
                   <td className="px-6 py-3 text-right font-mono text-xs text-fg2">
-                    {row.latency_ms}ms
+                    {row.latency_ms !== null && row.latency_ms !== undefined
+                      ? `${Math.round(row.latency_ms)}ms`
+                      : "—"}
                   </td>
                 </tr>
               ))}
@@ -103,18 +120,14 @@ export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
       <Modal
         open={Boolean(selected)}
         onClose={() => setSelected(null)}
-        title={
-          selected
-            ? `Prediction ${selected.trace_id ? selected.trace_id.slice(0, 8) : selected.id.slice(0, 8)}`
-            : "Prediction"
-        }
+        title={selected ? `Prediction ${shortTrace(selected)}` : "Prediction"}
       >
         {selected ? (
           <div className="flex flex-col gap-4">
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">Input</h3>
               <pre className="mt-2 overflow-x-auto rounded border border-[color:var(--border)] bg-teal-50 p-3 font-mono text-xs text-teal-900">
-                {JSON.stringify(selected.input, null, 2)}
+                {JSON.stringify(selected.input_preview_json ?? {}, null, 2)}
               </pre>
             </div>
             <div>
@@ -122,11 +135,11 @@ export function PredictionsTab({ deploymentId }: PredictionsTabProps) {
                 Output
               </h3>
               <pre className="mt-2 overflow-x-auto rounded border border-[color:var(--border)] bg-teal-50 p-3 font-mono text-xs text-teal-900">
-                {JSON.stringify(selected.output, null, 2)}
+                {JSON.stringify(selected.output_preview_json ?? {}, null, 2)}
               </pre>
             </div>
             <div className="rounded-md border border-[color:var(--border)] bg-bg-muted p-4 text-sm text-fg2">
-              SHAP waterfall - Coming in v1
+              SHAP waterfall — coming in v1
             </div>
           </div>
         ) : null}

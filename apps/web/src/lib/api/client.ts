@@ -241,11 +241,14 @@ export interface PredictionResponse {
 
 export interface PredictionLogEntry {
   id: string;
-  ts: string;
-  input: Record<string, unknown>;
-  output: unknown;
-  latency_ms: number;
-  trace_id: string;
+  deployment_id: string;
+  received_at: string;
+  latency_ms: number | null;
+  mode: string;
+  status_code: number;
+  trace_id: string | null;
+  input_preview_json: Record<string, unknown> | null;
+  output_preview_json: Record<string, unknown> | null;
 }
 
 export interface Page<T> {
