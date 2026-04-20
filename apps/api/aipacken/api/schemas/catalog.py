@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class ModelCatalogEntryRead(BaseModel):
@@ -25,6 +25,12 @@ class ModelCatalogEntryRead(BaseModel):
         default_factory=dict, validation_alias="signature_json"
     )
     tags: list[str] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def supported_tasks(self) -> list[str]:
+        raw = (self.signature_json or {}).get("supported_tasks") or []
+        return [str(t) for t in raw if isinstance(t, str)]
 
 
 class ModelCatalogList(BaseModel):

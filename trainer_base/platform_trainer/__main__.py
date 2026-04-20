@@ -37,7 +37,6 @@ import pandas as pd
 from platform_trainer import analyze, transforms
 from platform_trainer.adapters import get_adapter
 
-
 logger = logging.getLogger("platform_trainer")
 
 
@@ -109,6 +108,22 @@ def _feature_names(preprocessor: Any, fallback: list[str]) -> list[str]:
     return [_clean_feature_name(n) for n in raw]
 
 
+def _json_safe(value: Any) -> Any:
+    """Coerce hyperparameter values into JSON-compatible primitives.
+
+    MLP's ``hidden_layer_sizes`` is a tuple post-coercion; tuples don't
+    serialize cleanly across every client so emit them as lists. Anything
+    json.dumps already handles (numbers/strings/bools/None) passes through.
+    """
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, (list, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return value
+
+
 def _clean_feature_name(name: str) -> str:
     """Strip sklearn ColumnTransformer's `<step>__<col>` prefixes.
 
@@ -154,8 +169,25 @@ def main() -> int:
         if target not in df.columns:
             raise ValueError(f"target column {target!r} not in dataset")
 
-        task = transforms.infer_task(df[target])
-        logger.info("task.inferred", extra={"task": task, "rows": len(df)})
+        # The API may have persisted a user-chosen task override inside
+        # MODEL_CATALOG (see apps/api/.../runs router). If absent or invalid,
+        # fall back to the three-way heuristic on the target column. All
+        # downstream logic works off the three-way label; ``coarse_task`` maps
+        # it back to the two-way enum where needed.
+        model_catalog_for_task = json.loads(_env("MODEL_CATALOG") or "{}")
+        requested_task = (model_catalog_for_task.get("task") or "").strip()
+        valid_tasks3 = {"regression", "binary_classification", "multiclass_classification"}
+        if requested_task in valid_tasks3:
+            task3 = requested_task  # type: ignore[assignment]
+        else:
+            task3 = transforms.infer_task_3way(df[target])
+        task = transforms.coarse_task(task3)
+        logger.info(
+            "task.inferred",
+            extra={"task": task, "task3": task3, "rows": len(df), "source": (
+                "user" if requested_task in valid_tasks3 else "inferred"
+            )},
+        )
 
         # Auto label-encode non-numeric classification targets so every adapter
         # (XGBoost/LightGBM/AutoGluon/sklearn) sees numeric y. Capture the
@@ -195,19 +227,31 @@ def main() -> int:
             schema=schema,
         )
 
-        kind = (model_catalog.get("kind") or "").strip()
+        name = (model_catalog.get("kind") or model_catalog.get("name") or "").strip()
         hyperparams = model_catalog.get("hyperparams") or {}
-        time_limit = int(model_catalog.get("time_limit") or 0) or None
-        presets = model_catalog.get("presets") or "medium_quality"
+        signature = model_catalog.get("signature") or {}
+        task_class_map = signature.get("task_class_map") or {}
+        # AutoGluon carries ``time_limit`` / ``presets`` as regular hyperparams
+        # on the new catalog shape; accept both the flat legacy payload and
+        # the nested hyperparams dict to keep old runs working.
+        time_limit = int(
+            model_catalog.get("time_limit") or hyperparams.get("time_limit") or 0
+        ) or None
+        presets = (
+            model_catalog.get("presets")
+            or hyperparams.get("presets")
+            or "medium_quality"
+        )
 
-        adapter = get_adapter(kind)
+        adapter = get_adapter(name)
 
         model: Any
         metrics: dict[str, Any]
         feature_names: list[str]
         flavor: str
+        effective_hyperparams: dict[str, Any] = {}
 
-        if kind == "autogluon":
+        if name == "autogluon":
             # AutoGluon has no sklearn preprocessor in front of it, so we honor
             # the user's column selection by hand: kept_cols comes from
             # build_column_transformer, which already accounts for explicit
@@ -232,35 +276,72 @@ def main() -> int:
                 presets=presets,
                 output_dir=predictor_path,
             )
+            effective_hyperparams = {
+                "time_limit": time_limit,
+                "presets": presets,
+                **(hyperparams or {}),
+            }
             flavor = "autogluon"
             feature_names = feature_cols
             X_post_sample = X_val
             y_pred = model.predict(X_val)
         else:
-            model, metrics = adapter.fit(
-                kind=kind,
-                X_train=X_train,
-                y_train=y_train,
-                X_val=X_val,
-                y_val=y_val,
-                hyperparams=hyperparams,
-                task=task,
-                preprocessor=preprocessor,
-            )
+            # Fit the preprocessor once so HPO trials (and any future multi-fit
+            # path) don't pay a re-fit cost per candidate. Adapters receive
+            # already-transformed numpy arrays; we re-wrap into a Pipeline here
+            # so SHAP, bias, and serving see the same artifact shape as before.
+            X_train_np = preprocessor.fit_transform(X_train, y_train)
+            X_val_np = preprocessor.transform(X_val)
+
+            from sklearn.pipeline import Pipeline
+
+            if name.startswith("sklearn_"):
+                estimator, metrics, effective_hyperparams = adapter.fit_estimator(
+                    name=name,
+                    task3=task3,
+                    task_class_map=task_class_map,
+                    X_train=X_train_np,
+                    y_train=y_train,
+                    X_val=X_val_np,
+                    y_val=y_val,
+                    hyperparams=hyperparams,
+                )
+                label_encoder = None
+            else:
+                (
+                    estimator,
+                    metrics,
+                    effective_hyperparams,
+                    label_encoder,
+                ) = adapter.fit_estimator(
+                    name=name,
+                    task3=task3,
+                    task_class_map=task_class_map,
+                    X_train=X_train_np,
+                    y_train=y_train,
+                    X_val=X_val_np,
+                    y_val=y_val,
+                    hyperparams=hyperparams,
+                )
+
+            model = Pipeline(steps=[("preprocess", preprocessor), ("model", estimator)])
+            if label_encoder is not None:
+                # Attribute carries through joblib.dump so serving can decode
+                # integer class predictions back to original labels.
+                model.label_encoder_ = label_encoder  # type: ignore[attr-defined]
             flavor = "sklearn"
-            pre_fitted = model.named_steps["preprocess"]
-            feature_names = _feature_names(pre_fitted, kept_cols)
-            X_post_sample = pre_fitted.transform(X_val)
-            y_pred = model.predict(X_val)
+            feature_names = _feature_names(preprocessor, kept_cols)
+            X_post_sample = X_val_np
+            y_pred = estimator.predict(X_val_np)
 
             # Persist the fitted pipeline (preprocessor + estimator) for serving.
             import joblib
 
             joblib.dump(model, artifacts_dir / "model.pkl")
 
-        for name, value in metrics.items():
-            if isinstance(value, (int, float)):
-                _append_metric(metrics_path, name, value)
+        for _metric_name, _metric_value in metrics.items():
+            if isinstance(_metric_value, (int, float)):
+                _append_metric(metrics_path, _metric_name, _metric_value)
 
         logger.info(
             "train.complete",
@@ -274,7 +355,7 @@ def main() -> int:
         # runs permutation importance on the ensemble. Everything else goes
         # through the regular SHAP pipeline.
         shap_report: dict[str, Any] = {}
-        if kind == "autogluon":
+        if name == "autogluon":
             try:
                 val_df_with_target = X_val.copy()
                 val_df_with_target[target] = y_val.values
@@ -369,6 +450,26 @@ def main() -> int:
             (artifacts_dir / "input_schema.json").write_text(json.dumps(schema_doc))
         except Exception as exc:
             logger.warning("input_schema.write_failed", extra={"error": str(exc)})
+
+        # selected_hyperparams.json — the exact set the estimator was
+        # instantiated with. Phase 4 (HPO) will overwrite ``source`` to ``hpo``
+        # and include an ``hpo_summary`` block; for Phase 2 we always write
+        # ``source=user`` so the Run/Model detail pages can render a stable
+        # table even for non-HPO runs.
+        try:
+            selected_doc: dict[str, Any] = {
+                "source": "user",
+                "model_name": name,
+                "task": task3,
+                "hyperparameters": {
+                    str(k): _json_safe(v) for k, v in (effective_hyperparams or {}).items()
+                },
+            }
+            (artifacts_dir / "selected_hyperparams.json").write_text(
+                json.dumps(selected_doc, default=str)
+            )
+        except Exception as exc:
+            logger.warning("selected_hyperparams.write_failed", extra={"error": str(exc)})
 
         duration = time.monotonic() - t_start
         logger.info("trainer.complete", extra={"run_id": run_id, "duration_sec": round(duration, 2)})

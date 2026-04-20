@@ -6,6 +6,18 @@ import { GlassCard } from "@/components/molecules/GlassCard";
 import { api, errorMessage } from "@/lib/api/client";
 import { formatNumber, formatRelative } from "@/lib/format";
 
+function formatHpValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 export function ModelDetail() {
   const { id = "" } = useParams<{ id: string }>();
   const qc = useQueryClient();
@@ -31,6 +43,16 @@ export function ModelDetail() {
       qc.invalidateQueries({ queryKey: ["models"] });
       navigate("/models");
     },
+  });
+
+  // Fetch the hyperparameters for the most recent version's originating run so
+  // the "Training hyperparameters" panel renders the same shape the RunDetail
+  // Model section does. `versions` comes back sorted desc by version number.
+  const latestRunId = model.data?.versions?.[0]?.run_id ?? "";
+  const selectedHp = useQuery({
+    queryKey: ["runs", latestRunId, "selected_hyperparams"],
+    queryFn: () => api.runs.selectedHyperparams(latestRunId),
+    enabled: Boolean(latestRunId),
   });
 
   return (
@@ -139,6 +161,45 @@ export function ModelDetail() {
           </table>
         )}
       </GlassCard>
+
+      {latestRunId ? (
+        <GlassCard>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="font-display text-xl font-bold text-fg1">
+              Training hyperparameters
+            </h2>
+            <span className="text-xs text-fg3">
+              latest version · source:{" "}
+              <span className="font-mono text-fg2">
+                {selectedHp.data?.source ?? "—"}
+              </span>
+            </span>
+          </div>
+          <div className="mt-4">
+            {Object.keys(selectedHp.data?.hyperparameters ?? {}).length === 0 ? (
+              <p className="text-sm text-fg3">No hyperparameters recorded.</p>
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <tbody>
+                  {Object.entries(selectedHp.data?.hyperparameters ?? {}).map(
+                    ([key, value]) => (
+                      <tr
+                        key={key}
+                        className="border-b border-[color:var(--border)] last:border-0"
+                      >
+                        <td className="py-1.5 pr-4 font-mono text-fg2">{key}</td>
+                        <td className="py-1.5 font-mono text-fg1">
+                          {formatHpValue(value)}
+                        </td>
+                      </tr>
+                    ),
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </GlassCard>
+      ) : null}
     </div>
   );
 }

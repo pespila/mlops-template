@@ -78,6 +78,14 @@ export function RunDetail() {
     refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? false : 5_000),
   });
 
+  const selectedHp = useQuery({
+    queryKey: ["runs", id, "selected_hyperparams"],
+    queryFn: () => api.runs.selectedHyperparams(id),
+    enabled: Boolean(id),
+    // Poll until the artifact lands; once we have non-legacy data, stop.
+    refetchInterval: (q) => (q.state.data && q.state.data.source !== "legacy" ? false : 5_000),
+  });
+
   const logHistory = useQuery({
     queryKey: ["runs", id, "logs"],
     queryFn: () => api.runs.logs(id),
@@ -184,6 +192,65 @@ export function RunDetail() {
       </section>
 
       <GlassCard>
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="font-display text-xl font-bold text-fg1">Model</h2>
+          {selectedHp.data ? (
+            <HpSourcePill source={selectedHp.data.source} />
+          ) : null}
+        </div>
+        <p className="mt-1 text-sm text-fg2">
+          Estimator{" "}
+          <span className="font-mono text-fg1">
+            {selectedHp.data?.model_name ?? "—"}
+          </span>
+          {selectedHp.data?.task ? (
+            <>
+              {" · "}
+              <span className="font-mono text-fg1">
+                {selectedHp.data.task.replace(/_/g, " ")}
+              </span>
+            </>
+          ) : null}
+        </p>
+        <div className="mt-4">
+          <HyperparamTable hp={selectedHp.data?.hyperparameters ?? {}} />
+        </div>
+        {selectedHp.data?.hpo_summary ? (
+          <div className="mt-4 rounded-lg border border-[color:var(--border)] bg-bg-muted/40 p-4 text-sm">
+            <div className="font-semibold text-fg1">HPO summary</div>
+            <div className="mt-1 grid grid-cols-2 gap-x-6 gap-y-1 text-fg2 md:grid-cols-4">
+              <div>
+                trials:{" "}
+                <span className="font-mono text-fg1">
+                  {selectedHp.data.hpo_summary.n_trials_completed ?? "—"}
+                </span>
+              </div>
+              <div>
+                metric:{" "}
+                <span className="font-mono text-fg1">
+                  {selectedHp.data.hpo_summary.metric ?? "—"}
+                </span>
+              </div>
+              <div>
+                best:{" "}
+                <span className="font-mono text-fg1">
+                  {typeof selectedHp.data.hpo_summary.best_value === "number"
+                    ? formatNumber(selectedHp.data.hpo_summary.best_value, 4)
+                    : "—"}
+                </span>
+              </div>
+              <div>
+                direction:{" "}
+                <span className="font-mono text-fg1">
+                  {selectedHp.data.hpo_summary.direction ?? "—"}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </GlassCard>
+
+      <GlassCard>
         <h2 className="font-display text-xl font-bold text-fg1">Metrics over time</h2>
         <p className="mt-1 text-sm text-fg2">Per-step loss and evaluation metrics.</p>
         <div className="mt-4">
@@ -263,4 +330,52 @@ export function RunDetail() {
       </GlassCard>
     </div>
   );
+}
+
+function HpSourcePill({ source }: { source: "user" | "hpo" | "legacy" }) {
+  const label = source === "hpo" ? "HPO" : source === "legacy" ? "Legacy" : "User";
+  const tone =
+    source === "hpo"
+      ? "bg-primary/15 text-primary"
+      : source === "legacy"
+        ? "bg-bg-muted text-fg3"
+        : "bg-success/15 text-success";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function HyperparamTable({ hp }: { hp: Record<string, unknown> }) {
+  const entries = Object.entries(hp);
+  if (entries.length === 0) {
+    return <p className="text-sm text-fg3">No hyperparameters recorded.</p>;
+  }
+  return (
+    <table className="w-full border-collapse text-sm">
+      <tbody>
+        {entries.map(([key, value]) => (
+          <tr key={key} className="border-b border-[color:var(--border)] last:border-0">
+            <td className="py-1.5 pr-4 font-mono text-fg2">{key}</td>
+            <td className="py-1.5 font-mono text-fg1">{formatHpValue(value)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function formatHpValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }

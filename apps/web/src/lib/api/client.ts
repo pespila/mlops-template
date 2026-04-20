@@ -159,6 +159,11 @@ export interface FeatureSchema {
   sample: Array<string | number | boolean | null>;
 }
 
+export type TaskKind =
+  | "regression"
+  | "binary_classification"
+  | "multiclass_classification";
+
 export interface ModelCatalogEntry {
   id: string;
   name: string;
@@ -166,6 +171,22 @@ export interface ModelCatalogEntry {
   description: string;
   hyperparam_schema: JsonSchema;
   tags: string[];
+  supported_tasks?: TaskKind[];
+  framework?: string;
+}
+
+export interface SelectedHyperparams {
+  source: "user" | "hpo" | "legacy";
+  model_name: string | null;
+  task: TaskKind | null;
+  hyperparameters: Record<string, unknown>;
+  hpo_summary?: {
+    n_trials_completed?: number;
+    best_value?: number;
+    metric?: string;
+    direction?: "maximize" | "minimize";
+    search_space?: Record<string, unknown>;
+  };
 }
 
 export interface ExperimentRead {
@@ -428,6 +449,10 @@ export const api = {
           };
         }>
       >(`/runs/${encodeURIComponent(id)}/bias`),
+    selectedHyperparams: (id: string) =>
+      apiFetch<SelectedHyperparams>(
+        `/runs/${encodeURIComponent(id)}/selected_hyperparams`,
+      ),
   },
 
   models: {

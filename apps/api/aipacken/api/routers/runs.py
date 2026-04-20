@@ -168,6 +168,46 @@ async def get_run_bias(
     ]
 
 
+@router.get("/{run_id}/selected_hyperparams")
+async def get_run_selected_hyperparams(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    """Return the parsed ``selected_hyperparams.json`` artifact for a run.
+
+    Falls back to the raw ``Run.hyperparams_json`` (labelled ``source=legacy``)
+    for runs trained before this artifact was introduced so the Model tab on
+    older runs still renders a useful payload.
+    """
+    import json
+
+    row = (
+        await db.execute(
+            select(Artifact).where(
+                Artifact.run_id == run_id,
+                Artifact.kind == "selected_hyperparams",
+            )
+        )
+    ).scalars().first()
+    if row is not None:
+        try:
+            abs_path = storage.to_absolute(row.uri)
+            if abs_path.exists():
+                return json.loads(abs_path.read_text())
+        except Exception:  # noqa: BLE001
+            pass
+    run = await db.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {
+        "source": "legacy",
+        "model_name": None,
+        "task": None,
+        "hyperparameters": run.hyperparams_json or {},
+    }
+
+
 @router.get("/{run_id}/logs")
 async def get_run_logs(
     run_id: str,

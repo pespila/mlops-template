@@ -119,6 +119,13 @@ def _classify_artifact(name: str) -> tuple[str, str | None]:
             return "bias", "image/png"
         return "image", "image/png"
     if lower.endswith(".json"):
+        # selected_hyperparams.json is surfaced in the "Model" section of the
+        # run / model detail pages; give it a dedicated kind so the UI can
+        # filter it out of the generic json artifact list.
+        if lower == "selected_hyperparams.json":
+            return "selected_hyperparams", "application/json"
+        if lower == "input_schema.json":
+            return "input_schema", "application/json"
         return "json", "application/json"
     if lower.endswith(".csv"):
         return "csv", "text/csv"

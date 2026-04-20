@@ -17,15 +17,42 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-
 TaskKind = Literal["classification", "regression"]
+TaskKind3 = Literal[
+    "regression", "binary_classification", "multiclass_classification"
+]
 
 
 def infer_task(y: pd.Series) -> TaskKind:
-    """Heuristic: numeric with many unique values => regression, else classification."""
+    """Heuristic: numeric with many unique values => regression, else classification.
+
+    Kept on the two-way enum so existing adapters stay untouched; use
+    :func:`infer_task_3way` when the caller needs binary/multiclass distinction
+    (recommendation UI, HPO metric selection).
+    """
     if pd.api.types.is_float_dtype(y) or pd.api.types.is_integer_dtype(y):
         if y.nunique(dropna=True) > 20:
             return "regression"
+    return "classification"
+
+
+def infer_task_3way(y: pd.Series) -> TaskKind3:
+    """Return regression / binary_classification / multiclass_classification.
+
+    Uses the same numeric-cardinality heuristic as :func:`infer_task` for the
+    regression boundary, then splits the classification bucket by class count.
+    """
+    if pd.api.types.is_float_dtype(y) or pd.api.types.is_integer_dtype(y):
+        if y.nunique(dropna=True) > 20:
+            return "regression"
+    n_classes = y.nunique(dropna=True)
+    return "binary_classification" if n_classes <= 2 else "multiclass_classification"
+
+
+def coarse_task(task: str) -> TaskKind:
+    """Map a three-way task label back to the two-way enum used by adapters."""
+    if task == "regression":
+        return "regression"
     return "classification"
 
 
@@ -184,10 +211,13 @@ def coarse_schema(df: pd.DataFrame) -> dict[str, str]:
 
 
 __all__ = [
-    "TaskKind",
     "Pipeline",
-    "infer_task",
-    "build_column_transformer",
+    "TaskKind",
+    "TaskKind3",
     "apply_split",
+    "build_column_transformer",
     "coarse_schema",
+    "coarse_task",
+    "infer_task",
+    "infer_task_3way",
 ]
