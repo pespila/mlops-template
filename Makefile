@@ -107,5 +107,7 @@ openapi:
 build-bases:
 	@echo "[build-bases] building platform/trainer-base:latest (may be slow on first run)"
 	$(DOCKER) build -t platform/trainer-base:latest trainer_base/
+	@echo "[build-bases] building platform/trainer-base-autogluon:latest (large ~3GB)"
+	$(DOCKER) build -f trainer_base/Dockerfile.autogluon -t platform/trainer-base-autogluon:latest trainer_base/
 	@echo "[build-bases] building platform/serving-base:latest"
 	$(DOCKER) build -t platform/serving-base:latest serving_base/

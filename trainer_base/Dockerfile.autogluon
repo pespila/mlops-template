@@ -1,0 +1,35 @@
+# AutoGluon trainer image.
+#
+# Kept separate from the base trainer image because AutoGluon 1.1.1 pins
+# older xgboost + lightgbm than our built-in boosted-trees adapter uses,
+# and bundling both in one image would silently downgrade those adapters.
+# Paired with the autogluon ModelCatalogEntry via image_uri.
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      libgomp1 \
+      libglib2.0-0 \
+      libjpeg-dev \
+      zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -u 10001 -m trainer
+
+WORKDIR /app
+
+# Install our trainer package first (same as the base image) so the
+# shared analyze / transforms / __main__ code is available.
+COPY pyproject.toml ./
+RUN pip install --upgrade pip && pip install ".[autogluon]"
+
+COPY platform_trainer ./platform_trainer
+
+USER trainer
+
+ENTRYPOINT ["python", "-m", "platform_trainer"]

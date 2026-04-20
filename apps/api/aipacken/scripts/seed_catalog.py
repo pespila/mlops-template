@@ -70,6 +70,9 @@ CATALOG: list[dict[str, Any]] = [
         "name": "autogluon",
         "framework": "autogluon",
         "description": "AutoGluon TabularPredictor — zero-config AutoML.",
+        # AutoGluon pins older xgboost/lightgbm than our base trainer; ship it
+        # in a dedicated image so the two versions don't collide.
+        "image_uri": "platform/trainer-base-autogluon:latest",
         "signature_json": {
             "hyperparams": {
                 "time_limit": {"type": "int", "default": 600, "min": 60, "max": 36000},
