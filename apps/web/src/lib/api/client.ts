@@ -353,6 +353,29 @@ export const api = {
     metrics: (id: string) => apiFetch<RunMetric[]>(`/runs/${encodeURIComponent(id)}/metrics`),
     artifacts: (id: string) =>
       apiFetch<RunArtifact[]>(`/runs/${encodeURIComponent(id)}/artifacts`),
+    explanations: (id: string) =>
+      apiFetch<
+        Array<{
+          id: string;
+          kind: string;
+          feature_importance: Record<string, number>;
+          artifact_uri: string | null;
+        }>
+      >(`/runs/${encodeURIComponent(id)}/explanations`),
+    bias: (id: string) =>
+      apiFetch<
+        Array<{
+          id: string;
+          sensitive_feature: string;
+          metric_name: string;
+          overall_value: number | null;
+          group_values: {
+            groups?: Record<string, number | Record<string, number>>;
+            deltas?: Record<string, number>;
+            overall?: number | Record<string, number>;
+          };
+        }>
+      >(`/runs/${encodeURIComponent(id)}/bias`),
   },
 
   models: {

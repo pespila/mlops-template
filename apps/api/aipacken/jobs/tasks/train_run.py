@@ -267,6 +267,68 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                 except Exception as exc:
                     logger.warning("train_run.list_artifacts_failed", error=str(exc))
 
+                # Download + persist SHAP + bias JSON into platform tables so
+                # the RunDetail charts render without talking to MLflow.
+                try:
+                    import json as _json
+                    import tempfile as _tempfile
+                    from pathlib import Path as _Path
+
+                    from aipacken.db.models import BiasReport, ExplanationArtifact
+
+                    with _tempfile.TemporaryDirectory() as tmp:
+                        try:
+                            shap_path = mc.download_artifacts(
+                                mlflow_run_id, "shap_report.json", tmp
+                            )
+                            shap_doc = _json.loads(_Path(shap_path).read_text())
+                            db.add(
+                                ExplanationArtifact(
+                                    run_id=run_id,
+                                    kind="shap_global",
+                                    feature_importance_json=shap_doc.get(
+                                        "global_importance", {}
+                                    ),
+                                    artifact_uri=f"{artifact_uri}/shap_report.json",
+                                )
+                            )
+                        except Exception as exc:
+                            logger.info("train_run.shap_json_absent", error=str(exc))
+
+                        try:
+                            bias_path = mc.download_artifacts(
+                                mlflow_run_id, "bias_report.json", tmp
+                            )
+                            bias_doc = _json.loads(_Path(bias_path).read_text())
+                            groups = bias_doc.get("groups") or {}
+                            overall = bias_doc.get("overall")
+                            overall_scalar = None
+                            if isinstance(overall, (int, float)):
+                                overall_scalar = float(overall)
+                            # One row per sensitive_feature grouping.
+                            # Our current trainer flattens to a single group set
+                            # keyed by value tuple; emit a single BiasReport row.
+                            db.add(
+                                BiasReport(
+                                    run_id=run_id,
+                                    sensitive_feature=",".join(
+                                        sorted(groups.keys())[:5]
+                                    )
+                                    or "combined",
+                                    metric_name=str(bias_doc.get("metric") or "accuracy"),
+                                    group_values_json={
+                                        "groups": groups,
+                                        "deltas": bias_doc.get("deltas") or {},
+                                        "overall": overall,
+                                    },
+                                    overall_value=overall_scalar,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.info("train_run.bias_json_absent", error=str(exc))
+                except Exception as exc:
+                    logger.warning("train_run.report_ingest_failed", error=str(exc))
+
                 # Register a platform-side ModelVersion so the Deploy button appears.
                 model_name = f"{entry.name}-run-{run_id[:8]}"
                 reg = RegisteredModel(name=model_name, description=entry.description)

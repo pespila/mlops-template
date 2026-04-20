@@ -256,6 +256,31 @@ def main() -> int:
         shap_uri = _maybe_upload(Path("/tmp/shap_global.png"), "shap")
         bias_uri = _maybe_upload(Path("/tmp/bias.png"), "bias")
 
+        # Log JSON payloads for the frontend SHAP bar chart + bias table.
+        # log_dict is a single REST call to MLflow — no dep on flask.
+        try:
+            import mlflow as _mlflow
+
+            tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+            if tracking_uri:
+                _mlflow.set_tracking_uri(tracking_uri)
+            active = _mlflow.active_run()
+            mlflow_run_id_env = os.environ.get("MLFLOW_RUN_ID") or run_id
+            _ctx = _mlflow.start_run(run_id=mlflow_run_id_env) if active is None else None
+            try:
+                if shap_report:
+                    payload = {
+                        "global_importance": shap_report.get("global_importance", {}),
+                    }
+                    _mlflow.log_dict(payload, "shap_report.json")
+                if bias_report:
+                    _mlflow.log_dict(bias_report, "bias_report.json")
+            finally:
+                if _ctx is not None:
+                    _mlflow.end_run()
+        except Exception as exc:
+            logger.warning("mlflow.log_reports_failed", extra={"error": str(exc)})
+
         input_schema = mlflow_sink.build_input_schema(X_post_sample, feature_names)
         artifacts_dir = work_dir / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)

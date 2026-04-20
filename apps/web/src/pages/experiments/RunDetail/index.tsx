@@ -38,6 +38,53 @@ export function RunDetail() {
     enabled: Boolean(id),
   });
 
+  const explanations = useQuery({
+    queryKey: ["runs", id, "explanations"],
+    queryFn: () => api.runs.explanations(id),
+    enabled: Boolean(id),
+    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? false : 5_000),
+  });
+
+  const bias = useQuery({
+    queryKey: ["runs", id, "bias"],
+    queryFn: () => api.runs.bias(id),
+    enabled: Boolean(id),
+    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? false : 5_000),
+  });
+
+  const shapBars = useMemo(() => {
+    const first = explanations.data?.[0];
+    if (!first) return [] as { feature: string; importance: number }[];
+    return Object.entries(first.feature_importance ?? {}).map(([feature, importance]) => ({
+      feature,
+      importance: Number(importance) || 0,
+    }));
+  }, [explanations.data]);
+
+  const biasRows = useMemo(() => {
+    const first = bias.data?.[0];
+    if (!first) return [] as { group: string; support: number; metric: number; baseline: number }[];
+    const groups = first.group_values?.groups ?? {};
+    const overall =
+      typeof first.overall_value === "number" ? first.overall_value : 0;
+    return Object.entries(groups).map(([group, val]) => {
+      const metric =
+        typeof val === "number"
+          ? val
+          : typeof val === "object" && val !== null
+            ? Number(Object.values(val)[0] ?? 0)
+            : 0;
+      return {
+        group,
+        support: 0,
+        metric,
+        baseline: overall,
+      };
+    });
+  }, [bias.data]);
+
+  const biasMetricLabel = bias.data?.[0]?.metric_name ?? "Metric";
+
   const finalMetrics = useMemo(() => {
     if (!metrics.data) return [];
     const byName = new Map<string, number>();
@@ -99,14 +146,14 @@ export function RunDetail() {
           <h2 className="font-display text-xl font-bold text-fg1">Global feature importance</h2>
           <p className="mt-1 text-sm text-fg2">SHAP-derived, averaged across the validation split.</p>
           <div className="mt-4">
-            <SHAPGlobalBars data={[]} />
+            <SHAPGlobalBars data={shapBars} />
           </div>
         </GlassCard>
         <GlassCard>
           <h2 className="font-display text-xl font-bold text-fg1">Bias analysis</h2>
           <p className="mt-1 text-sm text-fg2">Per-group metric deltas vs. the baseline.</p>
           <div className="mt-4">
-            <BiasGroupTable rows={[]} />
+            <BiasGroupTable rows={biasRows} metricLabel={biasMetricLabel} />
           </div>
         </GlassCard>
       </div>

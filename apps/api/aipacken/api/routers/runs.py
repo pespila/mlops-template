@@ -12,7 +12,15 @@ from aipacken.api.schemas.runs import (
     RunRead,
 )
 from aipacken.db import get_db
-from aipacken.db.models import Artifact, Metric, Run, TransformConfig, User
+from aipacken.db.models import (
+    Artifact,
+    BiasReport,
+    ExplanationArtifact,
+    Metric,
+    Run,
+    TransformConfig,
+    User,
+)
 from aipacken.jobs.queue import enqueue
 from aipacken.services.auth import get_current_user
 
@@ -109,6 +117,49 @@ async def get_run_artifacts(
         await db.execute(select(Artifact).where(Artifact.run_id == run_id))
     ).scalars().all()
     return list(rows)
+
+
+@router.get("/{run_id}/explanations")
+async def get_run_explanations(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, object]]:
+    rows = (
+        await db.execute(
+            select(ExplanationArtifact).where(ExplanationArtifact.run_id == run_id)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "kind": r.kind,
+            "feature_importance": r.feature_importance_json or {},
+            "artifact_uri": r.artifact_uri,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/{run_id}/bias")
+async def get_run_bias(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, object]]:
+    rows = (
+        await db.execute(select(BiasReport).where(BiasReport.run_id == run_id))
+    ).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "sensitive_feature": r.sensitive_feature,
+            "metric_name": r.metric_name,
+            "overall_value": r.overall_value,
+            "group_values": r.group_values_json or {},
+        }
+        for r in rows
+    ]
 
 
 @router.post("/{run_id}/cancel", response_model=RunRead)
