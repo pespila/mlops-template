@@ -53,31 +53,48 @@ def compute_shap(
 ) -> dict[str, Any]:
     """Compute SHAP values via TreeExplainer with a KernelExplainer fallback.
 
-    ``model`` is expected to be a callable or an object exposing ``predict``
-    (pipeline). The sample is assumed already aligned with ``feature_names``.
+    Works on either a bare estimator or a two-step sklearn Pipeline
+    (``preprocess`` + ``model``). For pipelines we always apply the
+    preprocessor first and hand SHAP the bare estimator on post-transform
+    arrays — otherwise SHAP tries to stash feature-name metadata on the
+    Pipeline, which exposes ``feature_names_in_`` as a read-only property
+    and blows up with ``has no setter``.
     """
+    import numpy as _np
     import shap  # heavyweight, imported only here
 
-    # TreeExplainer expects the raw tree estimator — try the final step of a pipeline.
-    inner = model
     if hasattr(model, "named_steps"):
-        inner = model.named_steps.get("model", model)
+        preprocess = model.named_steps.get("preprocess")
+        estimator = model.named_steps.get("model", model)
+    else:
+        preprocess = None
+        estimator = model
+
+    if preprocess is not None:
+        X_pre = preprocess.transform(X_sample)
+        if hasattr(X_pre, "toarray"):
+            X_pre = X_pre.toarray()
+        X_pre = _np.asarray(X_pre)
+    else:
+        X_pre = X_sample.values if hasattr(X_sample, "values") else X_sample
 
     shap_values: Any
     try:
-        explainer = shap.TreeExplainer(inner)
-        # TreeExplainer works on post-transform features when the pipeline transform
-        # is applied first; fall back to pipeline transform when available.
-        if hasattr(model, "named_steps") and "preprocess" in getattr(model, "named_steps", {}):
-            X_pre = model.named_steps["preprocess"].transform(X_sample)
-        else:
-            X_pre = X_sample.values if hasattr(X_sample, "values") else X_sample
+        explainer = shap.TreeExplainer(estimator)
         shap_values = explainer.shap_values(X_pre)
     except Exception:
-        predict_fn = model.predict_proba if hasattr(model, "predict_proba") else model.predict
-        background = shap.sample(X_sample, min(100, len(X_sample)), random_state=0)
+        # KernelExplainer: use a plain lambda so SHAP can't walk back to the
+        # estimator and write attributes. Background must be a small dense
+        # 2-D array with the same column count as X_pre.
+        proba = getattr(estimator, "predict_proba", None)
+        if callable(proba):
+            predict_fn = lambda arr: proba(arr)  # noqa: E731
+        else:
+            predict_fn = lambda arr: estimator.predict(arr)  # noqa: E731
+        bg_rows = min(50, X_pre.shape[0])
+        background = shap.sample(X_pre, bg_rows, random_state=0) if bg_rows > 0 else X_pre
         explainer = shap.KernelExplainer(predict_fn, background)
-        shap_values = explainer.shap_values(X_sample, nsamples=100, silent=True)
+        shap_values = explainer.shap_values(X_pre, nsamples=100, silent=True)
 
     mean_abs = _mean_abs_shap(shap_values)
     if len(mean_abs) != len(feature_names):
