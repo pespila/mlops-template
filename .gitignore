@@ -55,3 +55,4 @@ packages/api-client/src/schema.d.ts
 
 # ---------- Claude Code ----------
 .claude/settings.local.json
+cookie.jar
