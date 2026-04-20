@@ -14,56 +14,92 @@ function prettyJson(body: unknown): string {
   return JSON.stringify(body, null, 2);
 }
 
+/**
+ * Parse the protocol + host out of an absolute URL. Falls back to the origin
+ * of the page when `url` is relative (same-host) so the login snippet
+ * still points at the right auth endpoint.
+ */
+function deriveOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    if (typeof window !== "undefined") return window.location.origin;
+    return "";
+  }
+}
+
 export function buildSnippets({ url, method, body }: SnippetInput): Snippets {
   const hasBody = body !== undefined && body !== null;
   const bodyString = hasBody ? prettyJson(body) : "";
+  const escapedBody = bodyString.replace(/'/g, "'\\''");
+  const origin = deriveOrigin(url);
+  const loginUrl = `${origin}/api/auth/login`;
 
-  const curlParts = [
-    `curl -X ${method} '${url}'`,
-    `  -H 'Content-Type: application/json'`,
-    `  --cookie 'session=<your-session-cookie>'`,
+  // ---------------- curl ----------------
+  // Two steps: log in once to a cookie jar, then reuse it for the prediction.
+  const curlPredictParts = [
+    `curl -X ${method} '${url}' \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -b cookie.jar`,
   ];
-  if (hasBody) curlParts.push(`  -d '${bodyString.replace(/'/g, "'\\''")}'`);
-  const curl = curlParts.join(" \\\n");
+  if (hasBody) {
+    curlPredictParts[curlPredictParts.length - 1] += " \\";
+    curlPredictParts.push(`  -d '${escapedBody}'`);
+  }
+  const curl = [
+    `# 1) Log in once — stores the platform session cookie in ./cookie.jar`,
+    `curl -s -X POST '${loginUrl}' \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -c cookie.jar \\`,
+    `  -d '{"email":"<your-email>","password":"<your-password>"}' > /dev/null`,
+    ``,
+    `# 2) Call the model — reuses the cookie jar from step 1`,
+    curlPredictParts.join("\n"),
+  ].join("\n");
 
-  const python = hasBody
-    ? `import requests
+  // ---------------- python ----------------
+  // requests.Session persists the cookie across calls so a long-lived
+  // client only authenticates once per process.
+  const pythonPayloadLine = hasBody ? `\npayload = ${bodyString}\n` : "";
+  const pythonCallArgs = hasBody
+    ? `    "${url}",\n    json=payload,\n    timeout=30,`
+    : `    "${url}",\n    timeout=30,`;
+  const python = `import requests
 
-payload = ${bodyString}
-
-response = requests.${method.toLowerCase()}(
-    "${url}",
-    json=payload,
-    cookies={"session": "<your-session-cookie>"},
+session = requests.Session()
+session.post(
+    "${loginUrl}",
+    json={"email": "<your-email>", "password": "<your-password>"},
     timeout=30,
-)
-response.raise_for_status()
-print(response.json())`
-    : `import requests
-
-response = requests.${method.toLowerCase()}(
-    "${url}",
-    cookies={"session": "<your-session-cookie>"},
-    timeout=30,
+).raise_for_status()
+${pythonPayloadLine}
+response = session.${method.toLowerCase()}(
+${pythonCallArgs}
 )
 response.raise_for_status()
 print(response.json())`;
 
-  const javascript = hasBody
-    ? `const response = await fetch("${url}", {
+  // ---------------- javascript ----------------
+  // credentials: "include" sends + stores the session cookie. Works in
+  // Node (via undici/global fetch) with a CookieJar, or in the browser
+  // directly.
+  const jsBodyLine = hasBody
+    ? `  body: JSON.stringify(${bodyString}),\n`
+    : "";
+  const javascript = `// 1) Log in once
+await fetch("${loginUrl}", {
+  method: "POST",
+  credentials: "include",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email: "<your-email>", password: "<your-password>" }),
+});
+
+// 2) Call the model
+const response = await fetch("${url}", {
   method: "${method}",
   credentials: "include",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(${bodyString}),
-});
-
-if (!response.ok) throw new Error(\`API \${response.status}\`);
-const data = await response.json();
-console.log(data);`
-    : `const response = await fetch("${url}", {
-  method: "${method}",
-  credentials: "include",
-});
+${jsBodyLine}});
 
 if (!response.ok) throw new Error(\`API \${response.status}\`);
 const data = await response.json();

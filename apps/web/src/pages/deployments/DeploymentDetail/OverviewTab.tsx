@@ -90,6 +90,16 @@ export function OverviewTab({ deployment }: OverviewTabProps) {
               ? "Loading schema…"
               : "Using a generic example body."}
         </p>
+        <p className="mt-2 rounded border border-[color:var(--border)] bg-bg-muted px-3 py-2 text-xs text-fg2">
+          <span className="font-semibold">Auth:</span> the snippet logs in first
+          with your platform credentials (same as the web UI — default{" "}
+          <code className="font-mono">admin@aipacken.local</code>) and reuses
+          the session cookie for the prediction call. Replace{" "}
+          <code className="font-mono">&lt;your-email&gt;</code> and{" "}
+          <code className="font-mono">&lt;your-password&gt;</code> with real
+          values. A per-deployment API-key flow that replaces the cookie is in
+          the v1 plan.
+        </p>
         <div className="mt-3">
           <CodeSnippetTabs snippets={snippets} />
         </div>
