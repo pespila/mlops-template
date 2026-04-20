@@ -159,4 +159,9 @@ def fit_estimator(
     return estimator, metrics, effective
 
 
-__all__ = ["fit_estimator"]
+def prepare_hyperparams(name: str, hyperparams: dict[str, Any]) -> dict[str, Any]:
+    """Public wrapper around :func:`_prepare_hyperparams` for hpo.py."""
+    return _prepare_hyperparams(name, hyperparams)
+
+
+__all__ = ["fit_estimator", "prepare_hyperparams"]

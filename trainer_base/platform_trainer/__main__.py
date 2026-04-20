@@ -231,6 +231,8 @@ def main() -> int:
         hyperparams = model_catalog.get("hyperparams") or {}
         signature = model_catalog.get("signature") or {}
         task_class_map = signature.get("task_class_map") or {}
+        hpo_cfg = model_catalog.get("hpo") or None
+        hpo_enabled = bool(hpo_cfg and hpo_cfg.get("enabled"))
         # AutoGluon carries ``time_limit`` / ``presets`` as regular hyperparams
         # on the new catalog shape; accept both the flat legacy payload and
         # the nested hyperparams dict to keep old runs working.
@@ -250,6 +252,7 @@ def main() -> int:
         feature_names: list[str]
         flavor: str
         effective_hyperparams: dict[str, Any] = {}
+        hpo_report: dict[str, Any] | None = None
 
         if name == "autogluon":
             # AutoGluon has no sklearn preprocessor in front of it, so we honor
@@ -295,7 +298,69 @@ def main() -> int:
 
             from sklearn.pipeline import Pipeline
 
-            if name.startswith("sklearn_"):
+            if hpo_enabled:
+                from platform_trainer import hpo as hpo_mod
+
+                seed = int((transform_cfg.get("split") or {}).get("seed", 42))
+                search_space = hpo_cfg.get("search_space") or {}
+                n_trials = int(hpo_cfg.get("n_trials") or 30)
+                timeout_sec = int(hpo_cfg.get("timeout_sec") or 1800)
+                metric_override = hpo_cfg.get("metric") or None
+                direction_override = hpo_cfg.get("direction") or None
+
+                if name.startswith("sklearn_"):
+                    def _prep(hp: dict[str, Any]) -> dict[str, Any]:
+                        return adapter.prepare_hyperparams(name, hp)
+
+                    estimator, metrics, hpo_report, label_encoder = hpo_mod.run_hpo(
+                        name=name,
+                        task3=task3,
+                        task_class_map=task_class_map,
+                        X_train=X_train_np,
+                        y_train=y_train,
+                        X_val=X_val_np,
+                        y_val=y_val,
+                        fixed_hyperparams={},
+                        search_space=search_space,
+                        n_trials=n_trials,
+                        timeout_sec=timeout_sec,
+                        metric=metric_override,
+                        direction=direction_override,
+                        seed=seed,
+                        prepare_hyperparams=_prep,
+                    )
+                else:
+                    def _prep_bt(hp: dict[str, Any]) -> dict[str, Any]:
+                        return adapter.prepare_hyperparams(name, task3, hp)
+
+                    estimator, metrics, hpo_report, label_encoder = hpo_mod.run_hpo(
+                        name=name,
+                        task3=task3,
+                        task_class_map=task_class_map,
+                        X_train=X_train_np,
+                        y_train=y_train,
+                        X_val=X_val_np,
+                        y_val=y_val,
+                        fixed_hyperparams={},
+                        search_space=search_space,
+                        n_trials=n_trials,
+                        timeout_sec=timeout_sec,
+                        metric=metric_override,
+                        direction=direction_override,
+                        seed=seed,
+                        prepare_hyperparams=_prep_bt,
+                        encode_labels=adapter.encode_labels,
+                    )
+                effective_hyperparams = hpo_report.get("best_params", {})
+                logger.info(
+                    "hpo.complete",
+                    extra={
+                        "metric": hpo_report.get("metric"),
+                        "best_value": hpo_report.get("best_value"),
+                        "trials": hpo_report.get("n_trials_completed"),
+                    },
+                )
+            elif name.startswith("sklearn_"):
                 estimator, metrics, effective_hyperparams = adapter.fit_estimator(
                     name=name,
                     task3=task3,
@@ -452,24 +517,42 @@ def main() -> int:
             logger.warning("input_schema.write_failed", extra={"error": str(exc)})
 
         # selected_hyperparams.json — the exact set the estimator was
-        # instantiated with. Phase 4 (HPO) will overwrite ``source`` to ``hpo``
-        # and include an ``hpo_summary`` block; for Phase 2 we always write
-        # ``source=user`` so the Run/Model detail pages can render a stable
-        # table even for non-HPO runs.
+        # instantiated with. Source is ``hpo`` when Optuna picked the values,
+        # ``user`` otherwise.
         try:
+            source = "hpo" if hpo_enabled and hpo_report is not None else "user"
             selected_doc: dict[str, Any] = {
-                "source": "user",
+                "source": source,
                 "model_name": name,
                 "task": task3,
                 "hyperparameters": {
-                    str(k): _json_safe(v) for k, v in (effective_hyperparams or {}).items()
+                    str(k): _json_safe(v)
+                    for k, v in (effective_hyperparams or {}).items()
                 },
             }
+            if source == "hpo" and hpo_report is not None:
+                selected_doc["hpo_summary"] = {
+                    "n_trials_completed": hpo_report.get("n_trials_completed"),
+                    "best_value": hpo_report.get("best_value"),
+                    "metric": hpo_report.get("metric"),
+                    "direction": hpo_report.get("direction"),
+                    "search_space": _json_safe(hpo_report.get("search_space") or {}),
+                }
             (artifacts_dir / "selected_hyperparams.json").write_text(
                 json.dumps(selected_doc, default=str)
             )
         except Exception as exc:
             logger.warning("selected_hyperparams.write_failed", extra={"error": str(exc)})
+
+        # reports/hpo.json — full Optuna study summary (per-trial list capped
+        # at 200). Only written on the HPO path.
+        if hpo_enabled and hpo_report is not None:
+            try:
+                (reports_dir / "hpo.json").write_text(
+                    json.dumps(_json_safe(hpo_report), default=str)
+                )
+            except Exception as exc:
+                logger.warning("hpo_report.write_failed", extra={"error": str(exc)})
 
         duration = time.monotonic() - t_start
         logger.info("trainer.complete", extra={"run_id": run_id, "duration_sec": round(duration, 2)})

@@ -59,6 +59,27 @@ async def create_run(
         await db.flush()
         transform_config_id = tc.id
 
+    # Enforce the strict either/or contract: HPO on → search_space is the
+    # single source of truth for tunable fields, hyperparams should be empty
+    # for those same fields. Reject mixed submissions with a helpful error.
+    if payload.hpo is not None and payload.hpo.enabled:
+        if not payload.hpo.search_space:
+            raise HTTPException(
+                status_code=422,
+                detail="HPO enabled but search_space is empty",
+            )
+        overlapping = set(payload.hyperparams or {}).intersection(
+            payload.hpo.search_space.keys()
+        )
+        if overlapping:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "hyperparams and hpo.search_space overlap on "
+                    f"{sorted(overlapping)} — use ranges or fixed values, not both"
+                ),
+            )
+
     # Stash `task` + `hpo` inside `hyperparams_json` under reserved keys so
     # the existing JSONB column carries them without a DB migration. The
     # worker unpacks them when it builds MODEL_CATALOG for the trainer.

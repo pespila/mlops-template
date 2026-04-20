@@ -133,4 +133,18 @@ def fit_estimator(
     return estimator, metrics, effective, encoder
 
 
-__all__ = ["fit_estimator"]
+def prepare_hyperparams(
+    name: str, task3: str, hyperparams: dict[str, Any]
+) -> dict[str, Any]:
+    """Public wrapper around :func:`_prepare_hyperparams` for hpo.py."""
+    return _prepare_hyperparams(name, task3, hyperparams)
+
+
+def encode_labels(
+    task3: str, y_train: pd.Series, y_val: pd.Series
+) -> tuple[pd.Series, pd.Series, Any | None]:
+    """Public wrapper around :func:`_encode_labels` for hpo.py."""
+    return _encode_labels(task3, y_train, y_val)
+
+
+__all__ = ["fit_estimator", "prepare_hyperparams", "encode_labels"]
