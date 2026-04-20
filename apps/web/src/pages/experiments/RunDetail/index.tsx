@@ -36,6 +36,14 @@ export function RunDetail() {
     queryKey: ["runs", id, "artifacts"],
     queryFn: () => api.runs.artifacts(id),
     enabled: Boolean(id),
+    // Artifact rows land after the container exits — keep polling until we
+    // see something or the run reaches a terminal state.
+    refetchInterval: (q) => {
+      const status = run.data?.status;
+      if ((q.state.data?.length ?? 0) > 0) return false;
+      if (status === "succeeded" || status === "failed" || status === "cancelled") return 3_000;
+      return 5_000;
+    },
   });
 
   const explanations = useQuery({
