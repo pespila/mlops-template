@@ -134,12 +134,12 @@ async def health() -> HealthResponse:
 
 @app.get("/ready", response_model=HealthResponse)
 async def ready() -> HealthResponse:
-    if state.model is None or state.sample_row is None:
+    # Readiness only asserts the model deserialized and the FastAPI app is up.
+    # We deliberately don't do a sample inference here: a trained model may
+    # only accept a post-transform feature shape, and /ready must not fail
+    # when a valid, deployable model can't be exercised with synthetic data.
+    if state.model is None:
         raise HTTPException(status_code=503, detail="model not loaded")
-    try:
-        _predict_df(pd.DataFrame([state.sample_row]))
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"inference_failed: {exc}") from exc
     return HealthResponse(status="ready", version=__version__)
 
 

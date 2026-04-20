@@ -475,6 +475,13 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                         shutil.copy2(src_abs, dst)
                     mv.storage_path = storage.to_relative(dst)
 
+                # The serving loader looks for input_schema.json next to the
+                # model artifact — copy it into the model version dir too so
+                # runs can be pruned without breaking already-deployed models.
+                schema_src = storage.run_artifacts_dir(run_id) / "input_schema.json"
+                if schema_src.exists():
+                    shutil.copy2(schema_src, mv_dir / "input_schema.json")
+
                 await db2.commit()
         except Exception as exc:
             logger.warning("train_run.model_register_failed", error=str(exc))
