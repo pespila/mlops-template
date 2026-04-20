@@ -23,7 +23,11 @@ networks:
 
 volumes:
   pgdata:
+  # Explicit name so the Docker volume is exactly `platform-data`
+  # (no compose-project prefix). The worker passes this name by value when
+  # spawning training + serving containers — those can't infer the prefix.
   platform-data:
+    name: platform-data
 
 services:
   proxy:
