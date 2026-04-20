@@ -258,18 +258,46 @@ def main() -> int:
             extra={"metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))}},
         )
 
-        # SHAP ------------------------------------------------------------------
+        # Feature importance ----------------------------------------------------
+        # SHAP's KernelExplainer doesn't play with AutoGluon's TabularPredictor
+        # (predict_proba wants a DataFrame, SHAP hands it numpy), so for the
+        # AutoGluon path we use its native feature_importance(val_df) which
+        # runs permutation importance on the ensemble. Everything else goes
+        # through the regular SHAP pipeline.
         shap_report: dict[str, Any] = {}
-        try:
-            sample_n = min(200, len(X_val))
-            shap_report = analyze.compute_shap(
-                model=model,
-                X_sample=X_val.head(sample_n),
-                feature_names=feature_names,
-                plot_path=artifacts_dir / "shap_global.png",
-            )
-        except Exception as exc:
-            logger.warning("shap.failed", extra={"error": str(exc)})
+        if kind == "autogluon":
+            try:
+                val_df_with_target = X_val.copy()
+                val_df_with_target[target] = y_val.values
+                fi = model.feature_importance(val_df_with_target)
+                importance: dict[str, float] = {}
+                for feat, row in fi.iterrows():
+                    val = row.get("importance") if hasattr(row, "get") else row["importance"]
+                    if val is None or pd.isna(val):
+                        continue
+                    importance[str(feat)] = float(val)
+                shap_report = {"global_importance": importance}
+
+                # Matplotlib horizontal bar, same shape as the sklearn path.
+                try:
+                    from platform_trainer.analyze import _save_importance_plot
+
+                    _save_importance_plot(importance, artifacts_dir / "shap_global.png")
+                except Exception as exc:
+                    logger.info("autogluon.plot_failed", extra={"error": str(exc)})
+            except Exception as exc:
+                logger.warning("autogluon.feature_importance_failed", extra={"error": str(exc)})
+        else:
+            try:
+                sample_n = min(200, len(X_val))
+                shap_report = analyze.compute_shap(
+                    model=model,
+                    X_sample=X_val.head(sample_n),
+                    feature_names=feature_names,
+                    plot_path=artifacts_dir / "shap_global.png",
+                )
+            except Exception as exc:
+                logger.warning("shap.failed", extra={"error": str(exc)})
 
         # Bias ------------------------------------------------------------------
         bias_report: dict[str, Any] = {}
