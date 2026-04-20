@@ -1,8 +1,12 @@
 # AutoGluon trainer image.
 #
 # Kept separate from the base trainer image because AutoGluon 1.1.1 pins
-# older xgboost + lightgbm than our built-in boosted-trees adapter uses,
-# and bundling both in one image would silently downgrade those adapters.
+# older xgboost + lightgbm + scikit-learn than our base pyproject does.
+# Rather than install the base pyproject (which would fail resolution),
+# we install AutoGluon first — letting it pick its own versions of those
+# libraries — and then layer on the post-training extras (shap, fairlearn,
+# joblib, matplotlib) that the shared `platform_trainer` package needs.
+#
 # Paired with the autogluon ModelCatalogEntry via image_uri.
 
 FROM python:3.11-slim
@@ -23,11 +27,21 @@ RUN useradd -u 10001 -m trainer
 
 WORKDIR /app
 
-# Install our trainer package first (same as the base image) so the
-# shared analyze / transforms / __main__ code is available.
-COPY pyproject.toml ./
-RUN pip install --upgrade pip && pip install ".[autogluon]"
+# Install AutoGluon first so it gets to pick its own pinned versions of
+# scikit-learn / xgboost / lightgbm / numpy / pandas.
+RUN pip install --upgrade pip && \
+    pip install "autogluon.tabular[lightgbm,xgboost,catboost]==1.1.1"
 
+# Layer on the post-training analysis libraries. AutoGluon already brings
+# compatible numpy + pandas + pyarrow so we leave those alone.
+RUN pip install \
+      "shap==0.46.0" \
+      "fairlearn==0.11.0" \
+      "joblib==1.4.2" \
+      "matplotlib==3.9.2" \
+      "pydantic==2.9.2"
+
+# Drop our trainer package in last (no deps pulled — installed via path).
 COPY platform_trainer ./platform_trainer
 
 USER trainer
