@@ -15,6 +15,7 @@ from aipacken.config import get_settings
 from aipacken.db import SessionLocal
 from aipacken.jobs.tasks import (
     analyze_run,
+    build_package,
     cleanup,
     deploy_model,
     profile_dataset,
@@ -50,6 +51,7 @@ class WorkerSettings:
         deploy_model.deploy_model,
         teardown_deployment.teardown_deployment,
         cleanup.cleanup,
+        build_package.build_package,
     ]
     cron_jobs: list[Any] = []
     on_startup = startup

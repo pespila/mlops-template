@@ -33,7 +33,7 @@ def ensure_base_dirs() -> None:
         _os.chmod(root, 0o777)
     except OSError:
         pass
-    for sub in ("datasets", "runs", "models"):
+    for sub in ("datasets", "runs", "models", "packages"):
         p = root / sub
         p.mkdir(parents=True, exist_ok=True)
         try:
@@ -97,6 +97,19 @@ def ensure_run_dirs(run_id: str) -> None:
 
 def model_version_dir(model_version_id: str) -> Path:
     return _root() / "models" / model_version_id
+
+
+# ---- package ----
+
+def package_dir(package_id: str) -> Path:
+    """Scratch build directory for a single package under construction."""
+    return _root() / "packages" / package_id
+
+
+def package_tar_path(package_id: str) -> Path:
+    """Final downloadable tar.gz lives next to the scratch dir so the DB's
+    ``storage_path`` points at a single file the download endpoint streams."""
+    return _root() / "packages" / f"{package_id}.tar.gz"
 
 
 # ---- generic ----

@@ -259,6 +259,19 @@ export type DeploymentStatus =
   | "stopping"
   | "stopped";
 
+export type ModelPackageStatus = "pending" | "building" | "ready" | "failed";
+
+export interface ModelPackageRead {
+  id: string;
+  model_version_id: string;
+  status: ModelPackageStatus;
+  storage_path: string | null;
+  size_bytes: number | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DeploymentRead {
   id: string;
   name: string;
@@ -491,6 +504,22 @@ export const api = {
       ),
     remove: (id: string) =>
       apiFetch<void>(`/models/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  },
+
+  packages: {
+    createFor: (modelId: string, versionId: string) =>
+      apiFetch<ModelPackageRead>(
+        `/models/${encodeURIComponent(modelId)}/versions/${encodeURIComponent(versionId)}/package`,
+        { method: "POST" },
+      ),
+    listFor: (modelId: string, versionId: string) =>
+      apiFetch<ModelPackageRead[]>(
+        `/models/${encodeURIComponent(modelId)}/versions/${encodeURIComponent(versionId)}/packages`,
+      ),
+    get: (packageId: string) =>
+      apiFetch<ModelPackageRead>(`/model-packages/${encodeURIComponent(packageId)}`),
+    downloadUrl: (packageId: string) =>
+      `/api/model-packages/${encodeURIComponent(packageId)}/download`,
   },
 
   deployments: {

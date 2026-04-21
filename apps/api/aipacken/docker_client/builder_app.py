@@ -218,6 +218,58 @@ async def stream_logs(container_id: str) -> StreamingResponse:
     return StreamingResponse(_iter(), media_type="text/event-stream")
 
 
+class SaveImageRequest(BaseModel):
+    image: str
+    # Absolute path inside the shared platform-data volume where the tar is
+    # written. The caller is responsible for picking a path inside
+    # ``/var/platform-data`` — the endpoint rejects anything else.
+    dest_path: str
+
+
+class SaveImageResponse(BaseModel):
+    image: str
+    dest_path: str
+    size_bytes: int
+
+
+@app.post("/save_image", response_model=SaveImageResponse)
+async def save_image(req: SaveImageRequest) -> SaveImageResponse:
+    """Stream ``docker save`` for *image* into *dest_path* on the shared volume.
+
+    Kept on the builder so the api/worker never touch the Docker socket. Path
+    must live under ``/var/platform-data`` (the only writable volume shared
+    between builder and worker); anything else is rejected.
+    """
+    import os
+
+    data_root = "/var/platform-data"
+    dest = os.path.abspath(req.dest_path)
+    if not dest.startswith(data_root + os.sep):
+        raise HTTPException(
+            status_code=400, detail=f"dest_path must be under {data_root}"
+        )
+
+    client = get_docker()
+    try:
+        image = client.images.get(req.image)
+    except ImageNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"image_not_found: {req.image}") from exc
+
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    total = 0
+    try:
+        with open(dest, "wb") as fp:
+            for chunk in image.save(named=True):
+                if not chunk:
+                    continue
+                fp.write(chunk)
+                total += len(chunk)
+    except APIError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return SaveImageResponse(image=req.image, dest_path=dest, size_bytes=total)
+
+
 @app.get("/events/stream")
 async def stream_events() -> StreamingResponse:
     client = get_docker()

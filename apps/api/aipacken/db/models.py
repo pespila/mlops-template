@@ -228,6 +228,24 @@ class ExplanationArtifact(Base, IdMixin, TimestampsMixin):
     artifact_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
 
+class ModelPackage(Base, IdMixin, TimestampsMixin):
+    """A downloadable bundle for a ModelVersion.
+
+    Populated asynchronously by the ``build_package`` worker job: bundles the
+    serving docker image (``docker save``), the model artifacts, a README,
+    a minimal Dockerfile to rebuild the image, and a standalone ``predict.py``
+    into a tar.gz living under ``packages/{id}.tar.gz`` on platform-data.
+    """
+
+    model_version_id: Mapped[str] = mapped_column(
+        ForeignKey("model_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class BuildJob(Base, IdMixin, TimestampsMixin):
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     tag: Mapped[str] = mapped_column(String(255), nullable=False, index=True)

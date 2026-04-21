@@ -80,6 +80,19 @@ class BuilderClient:
             r.raise_for_status()
             return r.json()
 
+    async def save_image(self, image: str, dest_path: str) -> dict[str, Any]:
+        """Ask the builder to ``docker save`` *image* into *dest_path*.
+
+        The destination must live under ``/var/platform-data`` — the shared
+        volume both builder and worker have mounted. Returns the size of the
+        written tar in bytes.
+        """
+        payload = {"image": image, "dest_path": dest_path}
+        async with httpx.AsyncClient(base_url=self._base_url, timeout=None) as c:
+            r = await c.post("/save_image", json=payload)
+            r.raise_for_status()
+            return r.json()
+
     async def stream_logs(self, container_id: str) -> httpx.Response:
         # Caller iterates lines via aiter_lines; kept open until iteration completes.
         client = httpx.AsyncClient(base_url=self._base_url, timeout=None)

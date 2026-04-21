@@ -18,6 +18,7 @@ from aipacken.api.routers import (
     health,
     internal,
     models,
+    packages,
     predictions,
     runs,
     sse,
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(predictions.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
     app.include_router(internal.router, prefix="/api")
+    app.include_router(packages.router, prefix="/api")
 
     app.include_router(sse.router, prefix="/sse")
 

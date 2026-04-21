@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Rocket } from "lucide-react";
-import { useState } from "react";
+import { Download, Rocket } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { EditableHeading } from "@/components/molecules/EditableHeading";
 import { GlassCard } from "@/components/molecules/GlassCard";
-import { api, errorMessage } from "@/lib/api/client";
+import { api, errorMessage, type ModelPackageRead } from "@/lib/api/client";
 import { formatNumber, formatRelative } from "@/lib/format";
 
 function formatHpValue(value: unknown): string {
@@ -18,6 +18,97 @@ function formatHpValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function DownloadPackageButton({
+  modelId,
+  versionId,
+}: {
+  modelId: string;
+  versionId: string;
+}) {
+  // Latest package for this version — lets the user re-download without
+  // rebuilding if there's already a ready tar sitting on disk.
+  const list = useQuery({
+    queryKey: ["package-list", versionId],
+    queryFn: () => api.packages.listFor(modelId, versionId),
+    enabled: Boolean(versionId),
+  });
+  const latest: ModelPackageRead | undefined = list.data?.[0];
+  const [pollingId, setPollingId] = useState<string | null>(null);
+  const active = pollingId ?? (latest && latest.status !== "ready" ? latest.id : null);
+
+  const poll = useQuery({
+    queryKey: ["package", active ?? "none"],
+    queryFn: () => api.packages.get(active!),
+    enabled: Boolean(active),
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      if (!data) return 2_000;
+      return data.status === "ready" || data.status === "failed" ? false : 2_000;
+    },
+  });
+
+  // When a fresh build reaches "ready", auto-trigger the download so the user
+  // doesn't have to click a second time.
+  useEffect(() => {
+    if (!pollingId) return;
+    const d = poll.data;
+    if (d && d.id === pollingId && d.status === "ready") {
+      window.location.href = api.packages.downloadUrl(d.id);
+      setPollingId(null);
+      list.refetch();
+    }
+    if (d && d.id === pollingId && d.status === "failed") {
+      setPollingId(null);
+    }
+  }, [poll.data, pollingId, list]);
+
+  const create = useMutation({
+    mutationFn: () => api.packages.createFor(modelId, versionId),
+    onSuccess: (pkg) => {
+      setPollingId(pkg.id);
+    },
+  });
+
+  const currentStatus = poll.data?.status ?? latest?.status;
+  const isReady = latest?.status === "ready";
+
+  const label = (() => {
+    if (create.isPending) return "Queuing…";
+    if (pollingId) {
+      if (currentStatus === "building") return "Building…";
+      if (currentStatus === "pending") return "Pending…";
+      if (currentStatus === "failed") return "Retry";
+      return "Working…";
+    }
+    return isReady ? "Download" : "Build package";
+  })();
+
+  const onClick = () => {
+    if (isReady && latest && !pollingId) {
+      window.location.href = api.packages.downloadUrl(latest.id);
+      return;
+    }
+    create.mutate();
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={create.isPending || Boolean(pollingId) && currentStatus !== "failed"}
+      className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--border)] bg-bg px-2.5 py-1 font-semibold text-fg1 transition hover:border-primary hover:bg-[color:var(--primary-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+      title={
+        isReady
+          ? "Download the packaged tar.gz"
+          : "Build a tarball with the serving image, artifacts, Dockerfile, and README"
+      }
+    >
+      <Download size={13} strokeWidth={2} />
+      {label}
+    </button>
+  );
 }
 
 export function ModelDetail() {
@@ -185,21 +276,24 @@ export function ModelDetail() {
                     {formatRelative(v.created_at)}
                   </td>
                   <td className="px-6 py-3 text-right text-xs">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeployingVersionId(v.id);
-                        deploy.mutate(v.id);
-                      }}
-                      disabled={deploy.isPending && deployingVersionId === v.id}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--border)] bg-bg px-2.5 py-1 font-semibold text-fg1 transition hover:border-primary hover:bg-[color:var(--primary-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-                      title="Deploy this version to a live endpoint"
-                    >
-                      <Rocket size={13} strokeWidth={2} />
-                      {deploy.isPending && deployingVersionId === v.id
-                        ? "Deploying…"
-                        : "Deploy"}
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeployingVersionId(v.id);
+                          deploy.mutate(v.id);
+                        }}
+                        disabled={deploy.isPending && deployingVersionId === v.id}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--border)] bg-bg px-2.5 py-1 font-semibold text-fg1 transition hover:border-primary hover:bg-[color:var(--primary-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Deploy this version to a live endpoint"
+                      >
+                        <Rocket size={13} strokeWidth={2} />
+                        {deploy.isPending && deployingVersionId === v.id
+                          ? "Deploying…"
+                          : "Deploy"}
+                      </button>
+                      <DownloadPackageButton modelId={id} versionId={v.id} />
+                    </div>
                   </td>
                 </tr>
               ))}

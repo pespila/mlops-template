@@ -1,5 +1,6 @@
 from aipacken.jobs.tasks import (
     analyze_run,
+    build_package,
     cleanup,
     deploy_model,
     profile_dataset,
@@ -9,6 +10,7 @@ from aipacken.jobs.tasks import (
 
 __all__ = [
     "analyze_run",
+    "build_package",
     "cleanup",
     "deploy_model",
     "profile_dataset",
