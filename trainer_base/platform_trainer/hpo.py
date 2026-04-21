@@ -19,7 +19,9 @@ from optuna.samplers import TPESampler
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
+    log_loss,
     mean_absolute_error,
+    mean_squared_error,
     r2_score,
     roc_auc_score,
 )
@@ -67,6 +69,41 @@ def _suggest(trial: optuna.Trial, name: str, spec: dict[str, Any]) -> Any:
             raise ValueError(f"categorical {name!r} has no choices")
         return trial.suggest_categorical(name, choices)
     raise ValueError(f"unknown search-space type for {name!r}: {stype!r}")
+
+
+def _full_metrics(
+    estimator: Any, X_val: np.ndarray, y_val: pd.Series, task3: str
+) -> dict[str, float]:
+    """Return the same metric bundle adapters produce for single-fit runs.
+
+    Classification -> accuracy + f1_macro + auroc + log_loss (when proba is
+    available). Regression -> mae + rmse + r2.
+    """
+    if task3 == "regression":
+        y_pred = estimator.predict(X_val)
+        return {
+            "mae": float(mean_absolute_error(y_val, y_pred)),
+            "rmse": float(np.sqrt(mean_squared_error(y_val, y_pred))),
+            "r2": float(r2_score(y_val, y_pred)),
+        }
+    y_pred = estimator.predict(X_val)
+    out: dict[str, float] = {
+        "accuracy": float(accuracy_score(y_val, y_pred)),
+        "f1_macro": float(f1_score(y_val, y_pred, average="macro", zero_division=0)),
+    }
+    if hasattr(estimator, "predict_proba"):
+        try:
+            proba = estimator.predict_proba(X_val)
+            if proba.shape[1] == 2:
+                out["auroc"] = float(roc_auc_score(y_val, proba[:, 1]))
+            else:
+                out["auroc"] = float(
+                    roc_auc_score(y_val, proba, multi_class="ovr", average="macro")
+                )
+            out["log_loss"] = float(log_loss(y_val, proba))
+        except (ValueError, AttributeError):
+            pass
+    return out
 
 
 def _score(
@@ -199,7 +236,10 @@ def run_hpo(
     best_estimator = best_trial.user_attrs.get("estimator")
     best_effective = best_trial.user_attrs.get("effective") or best_trial.params
 
-    best_metrics = {metric: float(best_trial.value)}
+    # Re-score the best estimator over the full metric set so the run's
+    # metrics panel doesn't show only the single optimized metric.
+    best_metrics = _full_metrics(best_estimator, X_val, y_val_fit, task3)
+    best_metrics[metric] = float(best_trial.value)
     report = {
         "n_trials_completed": len(completed),
         "best_value": float(best_trial.value),

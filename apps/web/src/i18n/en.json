@@ -21,14 +21,10 @@
     "empty": "Nothing here yet"
   },
   "dashboard": {
-    "eyebrow": "Platform · v0",
     "headline": "Train, deploy, and query ML models - all on your own machine.",
     "subhead": "Upload a dataset, pick a model (including AutoGluon, zero-config), and deploy to a live API. No cloud dependencies. Your data never leaves the host.",
     "ctaPrimary": "Start a new run →",
-    "ctaGhost": "Browse datasets →",
-    "stepUpload": "Bring your own data",
-    "stepTrain": "Pick a model - or let AutoGluon",
-    "stepDeploy": "One click to a live API"
+    "ctaGhost": "Browse datasets →"
   },
   "auth": {
     "loginTitle": "Sign in to AIpacken",

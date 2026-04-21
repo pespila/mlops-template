@@ -1,4 +1,4 @@
-import { LogOut, PanelLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight, LogOut, PanelLeft } from "lucide-react";
 import { Suspense } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 
@@ -16,14 +16,36 @@ function TopBar() {
 
   return (
     <header className="flex items-center justify-between border-b border-border bg-bg px-6 py-3">
-      <button
-        type="button"
-        onClick={toggle}
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-fg2 hover:bg-bg-muted hover:text-fg1"
-        aria-label="Toggle sidebar"
-      >
-        <PanelLeft size={18} strokeWidth={2} />
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={toggle}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-fg2 hover:bg-bg-muted hover:text-fg1"
+          aria-label="Toggle sidebar"
+        >
+          <PanelLeft size={18} strokeWidth={2} />
+        </button>
+        <div className="inline-flex overflow-hidden rounded-md border border-[color:var(--border)]">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="inline-flex h-8 w-8 items-center justify-center text-fg2 hover:bg-bg-muted hover:text-fg1"
+            aria-label="Go back"
+            title="Go back"
+          >
+            <ArrowLeft size={16} strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(1)}
+            className="inline-flex h-8 w-8 items-center justify-center border-l border-[color:var(--border)] text-fg2 hover:bg-bg-muted hover:text-fg1"
+            aria-label="Go forward"
+            title="Go forward"
+          >
+            <ArrowRight size={16} strokeWidth={2} />
+          </button>
+        </div>
+      </div>
       <div className="flex items-center gap-3 text-sm text-fg2">
         {user ? <span className="font-medium text-fg1">{user.email}</span> : null}
         {user ? (

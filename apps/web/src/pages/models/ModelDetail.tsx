@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Rocket } from "lucide-react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { EditableHeading } from "@/components/molecules/EditableHeading";
@@ -45,6 +47,25 @@ export function ModelDetail() {
     },
   });
 
+  const [deployingVersionId, setDeployingVersionId] = useState<string | null>(null);
+
+  const deploy = useMutation({
+    mutationFn: async (versionId: string) => {
+      const modelName = model.data?.name ?? "model";
+      // Slug-friendly default name; user can rename on the deployment page.
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+      return api.deployments.create({
+        model_version_id: versionId,
+        name: `${modelName}-${stamp}`,
+      });
+    },
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["deployments"] });
+      navigate(`/deployments/${d.id}`);
+    },
+    onSettled: () => setDeployingVersionId(null),
+  });
+
   // Fetch the hyperparameters for the most recent version's originating run so
   // the "Training hyperparameters" panel renders the same shape the RunDetail
   // Model section does. `versions` comes back sorted desc by version number.
@@ -71,6 +92,11 @@ export function ModelDetail() {
         ) : null}
         {remove.isError ? (
           <p className="max-w-xl text-sm text-danger">{errorMessage(remove.error)}</p>
+        ) : null}
+        {deploy.isError ? (
+          <p className="max-w-xl text-sm text-danger">
+            Deploy failed: {errorMessage(deploy.error)}
+          </p>
         ) : null}
       </header>
 
@@ -104,6 +130,9 @@ export function ModelDetail() {
                 </th>
                 <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
                   Created
+                </th>
+                <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+                  Actions
                 </th>
               </tr>
             </thead>
@@ -154,6 +183,23 @@ export function ModelDetail() {
                   </td>
                   <td className="px-6 py-3 text-xs text-fg2">
                     {formatRelative(v.created_at)}
+                  </td>
+                  <td className="px-6 py-3 text-right text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeployingVersionId(v.id);
+                        deploy.mutate(v.id);
+                      }}
+                      disabled={deploy.isPending && deployingVersionId === v.id}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--border)] bg-bg px-2.5 py-1 font-semibold text-fg1 transition hover:border-primary hover:bg-[color:var(--primary-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Deploy this version to a live endpoint"
+                    >
+                      <Rocket size={13} strokeWidth={2} />
+                      {deploy.isPending && deployingVersionId === v.id
+                        ? "Deploying…"
+                        : "Deploy"}
+                    </button>
                   </td>
                 </tr>
               ))}

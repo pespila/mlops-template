@@ -55,6 +55,15 @@ export interface WizardState {
   hpoTrials: number;
   /** Optuna timeout — propagated into the HpoConfig on submit. */
   hpoTimeoutSec: number;
+  /** Optional metric to optimize during HPO; null -> backend picks sensible default per task. */
+  hpoMetric: string | null;
+  /**
+   * Per-hyperparameter mode: "fixed" | "range" | "default". "default" excludes
+   * the hyperparameter from both `hyperparams` and `search_space` so the
+   * library default wins — the user opts out of tuning without having to
+   * know the default value themselves.
+   */
+  hpModes: Record<string, "fixed" | "range" | "default">;
   currentStep: WizardStep;
   experimentName: string;
   experimentId: string | null;
@@ -73,6 +82,9 @@ export interface WizardState {
   setHpoEnabled: (v: boolean) => void;
   setHpoTrials: (n: number) => void;
   setHpoTimeoutSec: (n: number) => void;
+  setHpoMetric: (v: string | null) => void;
+  setHpMode: (name: string, mode: "fixed" | "range" | "default") => void;
+  setHpModes: (modes: Record<string, "fixed" | "range" | "default">) => void;
   setStep: (step: WizardStep) => void;
   setExperimentName: (name: string) => void;
   setExperimentId: (id: string | null) => void;
@@ -99,6 +111,9 @@ const INITIAL: Omit<
   | "setHpoEnabled"
   | "setHpoTrials"
   | "setHpoTimeoutSec"
+  | "setHpoMetric"
+  | "setHpMode"
+  | "setHpModes"
   | "setStep"
   | "setExperimentName"
   | "setExperimentId"
@@ -118,6 +133,8 @@ const INITIAL: Omit<
   hpoEnabled: false,
   hpoTrials: 30,
   hpoTimeoutSec: 1800,
+  hpoMetric: null,
+  hpModes: {},
   currentStep: 1,
   experimentName: "",
   experimentId: null,
@@ -153,6 +170,10 @@ export const useWizardStore = create<WizardState>()(
       setHpoEnabled: (hpoEnabled) => set({ hpoEnabled }),
       setHpoTrials: (hpoTrials) => set({ hpoTrials }),
       setHpoTimeoutSec: (hpoTimeoutSec) => set({ hpoTimeoutSec }),
+      setHpoMetric: (hpoMetric) => set({ hpoMetric }),
+      setHpMode: (name, mode) =>
+        set((state) => ({ hpModes: { ...state.hpModes, [name]: mode } })),
+      setHpModes: (hpModes) => set({ hpModes }),
       setStep: (currentStep) => set({ currentStep }),
       setExperimentName: (experimentName) => set({ experimentName }),
       setExperimentId: (experimentId) => set({ experimentId }),
@@ -168,7 +189,7 @@ export const useWizardStore = create<WizardState>()(
     }),
     {
       name: "aipacken.wizard",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       migrate: (_persisted, _version) => {
         // Shape changed between v1 and v2 (new fields + WizardStep widened

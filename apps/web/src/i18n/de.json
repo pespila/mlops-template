@@ -21,14 +21,10 @@
     "empty": "Noch nichts vorhanden"
   },
   "dashboard": {
-    "eyebrow": "Plattform · v0",
     "headline": "ML-Modelle trainieren, deployen und abfragen - alles auf Ihrem Rechner.",
     "subhead": "Datensatz hochladen, Modell auswählen (inklusive AutoGluon, ohne Konfiguration), und als Live-API deployen. Keine Cloud-Abhängigkeiten. Ihre Daten verlassen den Host nicht.",
     "ctaPrimary": "Neuen Run starten →",
-    "ctaGhost": "Datensätze durchsuchen →",
-    "stepUpload": "Ihre eigenen Daten einbringen",
-    "stepTrain": "Modell wählen - oder AutoGluon lassen",
-    "stepDeploy": "Ein Klick zur Live-API"
+    "ctaGhost": "Datensätze durchsuchen →"
   },
   "auth": {
     "loginTitle": "Bei AIpacken anmelden",

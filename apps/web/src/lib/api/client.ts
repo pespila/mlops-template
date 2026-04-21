@@ -252,6 +252,7 @@ export interface ModelVersionRead {
 }
 
 export type DeploymentStatus =
+  | "pending"
   | "provisioning"
   | "ready"
   | "failed"

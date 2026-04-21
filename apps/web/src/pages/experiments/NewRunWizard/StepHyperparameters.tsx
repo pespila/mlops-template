@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/atoms/Button";
 import { useT } from "@/i18n";
-import { api, type ModelCatalogEntry } from "@/lib/api/client";
+import { api, type ModelCatalogEntry, type TaskKind } from "@/lib/api/client";
 import { cn } from "@/lib/cn";
 import { useWizardStore, type HpoSearchEntry } from "@/state/wizardStore";
 
@@ -28,6 +28,20 @@ function specsFromEntry(entry: ModelCatalogEntry | null): Record<string, Hyperpa
   if (!raw || typeof raw !== "object") return {};
   return raw as Record<string, HyperparamSpec>;
 }
+
+const METRIC_CHOICES_BY_TASK: Record<TaskKind, string[]> = {
+  regression: ["r2", "mae"],
+  binary_classification: ["auroc", "accuracy", "f1_macro"],
+  multiclass_classification: ["accuracy", "auroc", "f1_macro"],
+};
+
+const METRIC_DIRECTION: Record<string, "maximize" | "minimize"> = {
+  r2: "maximize",
+  mae: "minimize",
+  accuracy: "maximize",
+  auroc: "maximize",
+  f1_macro: "maximize",
+};
 
 function PointField({
   name,
@@ -226,6 +240,10 @@ export function StepHyperparameters() {
   const setHpoTrials = useWizardStore((s) => s.setHpoTrials);
   const hpoTimeoutSec = useWizardStore((s) => s.hpoTimeoutSec);
   const setHpoTimeoutSec = useWizardStore((s) => s.setHpoTimeoutSec);
+  const hpoMetric = useWizardStore((s) => s.hpoMetric);
+  const setHpoMetric = useWizardStore((s) => s.setHpoMetric);
+  const hpModes = useWizardStore((s) => s.hpModes);
+  const setHpMode = useWizardStore((s) => s.setHpMode);
   const task = useWizardStore((s) => s.task);
   const experimentName = useWizardStore((s) => s.experimentName);
   const setExperimentName = useWizardStore((s) => s.setExperimentName);
@@ -323,17 +341,49 @@ export function StepHyperparameters() {
         task,
       };
 
+      // Filter out hyperparameters whose row is set to "default" — omitting
+      // them from both dicts lets the library default take over in the trainer
+      // (sklearn_like / boosted_trees merge under-specified hyperparams with
+      // per-family defaults). Applies to both HPO and non-HPO paths.
+      const effectiveModes: Record<string, "fixed" | "range" | "default"> = {};
+      for (const name of Object.keys(specs)) {
+        const mode = hpModes[name];
+        if (mode) {
+          effectiveModes[name] = mode;
+        } else {
+          effectiveModes[name] = hpoEnabled ? "range" : "fixed";
+        }
+      }
+
       if (hpoEnabled) {
-        payload.hpo = {
+        const searchSpace: Record<string, HpoSearchEntry> = {};
+        for (const [name, mode] of Object.entries(effectiveModes)) {
+          if (mode === "range" && hpoSearchSpace[name] !== undefined) {
+            searchSpace[name] = hpoSearchSpace[name];
+          }
+        }
+        const hpoCfg: Record<string, unknown> = {
           enabled: true,
           n_trials: hpoTrials,
           timeout_sec: hpoTimeoutSec,
-          search_space: hpoSearchSpace,
+          search_space: searchSpace,
         };
+        if (hpoMetric) {
+          hpoCfg.metric = hpoMetric;
+          const direction = METRIC_DIRECTION[hpoMetric];
+          if (direction) hpoCfg.direction = direction;
+        }
+        payload.hpo = hpoCfg;
         // HPO path: fixed hyperparameters are empty by contract (either/or).
         payload.hyperparams = {};
       } else {
-        payload.hyperparams = hyperparams;
+        const pointHp: Record<string, unknown> = {};
+        for (const [name, mode] of Object.entries(effectiveModes)) {
+          if (mode === "fixed" && hyperparams[name] !== undefined) {
+            pointHp[name] = hyperparams[name];
+          }
+        }
+        payload.hyperparams = pointHp;
       }
 
       const run = await api.runs.create(payload);
@@ -362,47 +412,101 @@ export function StepHyperparameters() {
         <p className="text-sm text-fg3">This model has no declared hyperparameters.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          {Object.entries(specs).map(([name, spec]) => (
-            <div
-              key={name}
-              className="grid grid-cols-[minmax(180px,220px)_1fr] items-center gap-4"
-            >
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
-                  {name}
+          {Object.entries(specs).map(([name, spec]) => {
+            const mode =
+              hpModes[name] ?? (hpoEnabled ? "range" : "fixed");
+            return (
+              <div
+                key={name}
+                className="grid grid-cols-[minmax(180px,220px)_auto_1fr] items-center gap-4"
+              >
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+                    {name}
+                  </div>
+                  <div className="text-[10px] font-mono text-fg3">
+                    {spec.type}
+                    {spec.min !== undefined ? ` · ≥${spec.min}` : ""}
+                    {spec.max !== undefined ? ` · ≤${spec.max}` : ""}
+                    {spec.log ? " · log" : ""}
+                  </div>
                 </div>
-                <div className="text-[10px] font-mono text-fg3">
-                  {spec.type}
-                  {spec.min !== undefined ? ` · ≥${spec.min}` : ""}
-                  {spec.max !== undefined ? ` · ≤${spec.max}` : ""}
-                  {spec.log ? " · log" : ""}
+                <div className="inline-flex overflow-hidden rounded-pill border border-[color:var(--border-primary)] text-[10px]">
+                  {(hpoEnabled
+                    ? (["range", "default"] as const)
+                    : (["fixed", "default"] as const)
+                  ).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setHpMode(name, m)}
+                      className={cn(
+                        "px-2.5 py-1 font-semibold uppercase tracking-[0.08em] transition-colors",
+                        mode === m
+                          ? "bg-primary text-white"
+                          : "bg-bg text-fg2 hover:text-fg1",
+                      )}
+                      title={
+                        m === "default"
+                          ? "Skip tuning — let the library pick the default"
+                          : m === "range"
+                            ? "Include in the Optuna search space"
+                            : "Fixed value used in training"
+                      }
+                    >
+                      {m}
+                    </button>
+                  ))}
                 </div>
+                {mode === "default" ? (
+                  <span className="text-xs italic text-fg3">
+                    Library default (not tuned)
+                  </span>
+                ) : hpoEnabled ? (
+                  <RangeField
+                    name={name}
+                    spec={spec}
+                    entry={hpoSearchSpace[name]}
+                    onChange={(entry) =>
+                      setHpoSearchSpace({ ...hpoSearchSpace, [name]: entry })
+                    }
+                  />
+                ) : (
+                  <PointField
+                    name={name}
+                    spec={spec}
+                    value={
+                      (hyperparams[name] as number | string | boolean | undefined) ??
+                      (spec.default as number | string | boolean)
+                    }
+                    onChange={(v) => setHyperparams({ ...hyperparams, [name]: v })}
+                  />
+                )}
               </div>
-              {hpoEnabled ? (
-                <RangeField
-                  name={name}
-                  spec={spec}
-                  entry={hpoSearchSpace[name]}
-                  onChange={(entry) =>
-                    setHpoSearchSpace({ ...hpoSearchSpace, [name]: entry })
-                  }
-                />
-              ) : (
-                <PointField
-                  name={name}
-                  spec={spec}
-                  value={
-                    (hyperparams[name] as number | string | boolean | undefined) ??
-                    (spec.default as number | string | boolean)
-                  }
-                  onChange={(v) => setHyperparams({ ...hyperparams, [name]: v })}
-                />
-              )}
-            </div>
-          ))}
+            );
+          })}
 
           {hpoEnabled ? (
-            <div className="mt-2 grid grid-cols-1 gap-3 rounded-lg border border-[color:var(--border)] bg-bg-muted/40 p-4 md:grid-cols-2">
+            <div className="mt-2 grid grid-cols-1 gap-3 rounded-lg border border-[color:var(--border)] bg-bg-muted/40 p-4 md:grid-cols-3">
+              <label className="flex flex-col gap-1 text-xs">
+                <span className="font-semibold uppercase tracking-[0.08em] text-fg2">
+                  Metric
+                </span>
+                <select
+                  value={hpoMetric ?? ""}
+                  onChange={(ev) => setHpoMetric(ev.target.value || null)}
+                  className="rounded border border-[color:var(--border)] bg-bg px-2 py-1.5 text-sm focus:border-primary focus:outline-none"
+                >
+                  <option value="">Auto (task default)</option>
+                  {(METRIC_CHOICES_BY_TASK[task ?? "multiclass_classification"] ?? []).map(
+                    (m) => (
+                      <option key={m} value={m}>
+                        {m} ({METRIC_DIRECTION[m] ?? "maximize"})
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
               <label className="flex flex-col gap-1 text-xs">
                 <span className="font-semibold uppercase tracking-[0.08em] text-fg2">
                   Trials
