@@ -27,7 +27,6 @@ dependencies = [
   "watchfiles==0.24.0",
   "passlib==1.7.4",
   "bcrypt==4.0.1",
-  "python-jose[cryptography]==3.3.0",
   "aiosqlite==0.20.0",
   "httpx-sse==0.4.0",
   "uuid6==2024.7.10",

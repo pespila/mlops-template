@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from aipacken.api.routers import (
@@ -97,16 +96,8 @@ def create_app() -> FastAPI:
         secret_key=settings.platform_secret_key,
         session_cookie=settings.session_cookie_name,
         max_age=settings.session_max_age_seconds,
-        same_site="lax",
+        same_site="strict",
         https_only=settings.platform_env == "prod",
-    )
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
     )
 
     app.include_router(health.router, prefix="/api")

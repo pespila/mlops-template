@@ -1,8 +1,10 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_WEAK_PLACEHOLDERS = ("change-me", "change_me", "CHANGE-ME", "CHANGEME")
 
 
 class Settings(BaseSettings):
@@ -37,6 +39,33 @@ class Settings(BaseSettings):
 
     prediction_retention_days: int = 90
     artifact_retention_days: int = 90
+
+    @model_validator(mode="after")
+    def _reject_placeholder_secrets_in_prod(self) -> "Settings":
+        """Fail fast in prod if any secret still carries its placeholder default.
+
+        Prevents silent boot with `PLATFORM_ADMIN_PASSWORD=change-me` or a
+        default `INTERNAL_HMAC_TOKEN` — both are ship-stopping defaults and
+        an operator rotating the stack should hit the wall, not discover it
+        from an incident.
+        """
+        if self.platform_env != "prod":
+            return self
+
+        violations: list[str] = []
+        if any(pat in self.platform_admin_password for pat in _WEAK_PLACEHOLDERS):
+            violations.append("PLATFORM_ADMIN_PASSWORD")
+        if any(pat in self.internal_hmac_token for pat in _WEAK_PLACEHOLDERS):
+            violations.append("INTERNAL_HMAC_TOKEN")
+        if any(pat in self.platform_secret_key for pat in _WEAK_PLACEHOLDERS):
+            violations.append("PLATFORM_SECRET_KEY")
+
+        if violations:
+            raise ValueError(
+                "Refusing to boot in PLATFORM_ENV=prod with placeholder values for: "
+                f"{', '.join(violations)}. Set real secrets in .env before starting."
+            )
+        return self
 
 
 @lru_cache
