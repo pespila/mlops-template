@@ -25,6 +25,12 @@ networks:
     name: platform-net
   models-net:
     name: models-net
+  # Only the builder and docker-proxy talk on this network. Keeping it
+  # separate means a compromise in api/worker/frontend cannot reach the
+  # Docker API even via the proxy — they have no route to :2375.
+  docker-proxy-net:
+    name: docker-proxy-net
+    internal: true
 
 volumes:
   pgdata:
@@ -191,12 +197,81 @@ services:
           cpus: "4"
           memory: 4G
 
+  # Defence-in-depth between the builder and the host Docker socket. The
+  # builder never touches /var/run/docker.sock directly; instead it talks
+  # to this proxy on a dedicated 'docker-proxy-net' (not routable from
+  # api/worker/models). The proxy exposes only the Docker API verbs we
+  # actually use — everything else returns 403. See the allowlist below
+  # for the exact verb set and how it maps to builder operations.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.1
+    environment:
+      # Verb allowlist. Everything is 0/off by default on the image; we
+      # explicitly allow only what builder_app needs.
+      CONTAINERS: 1     # /run, /stop, /wait, /logs
+      IMAGES: 1         # /build, image pulls, /save_image
+      POST: 1           # required for /build, /run, /stop
+      BUILD: 1          # explicit BUILD scope
+      EVENTS: 1         # /events/stream (passed through to builder)
+      PING: 1           # liveness
+      VERSION: 1
+      # Critical DENY list — the defaults, restated for auditability.
+      AUTH: 0
+      SECRETS: 0
+      SERVICES: 0
+      SWARM: 0
+      SYSTEM: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      EXEC: 0
+      COMMIT: 0
+      CONFIGS: 0
+      NODES: 0
+      TASKS: 0
+      PLUGINS: 0
+      DISTRIBUTION: 0
+      LOG_LEVEL: warning
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-proxy-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2375/_ping || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
   builder:
     <<: *api-common
     command: ["uvicorn", "aipacken.docker_client.builder_app:app", "--host", "0.0.0.0", "--port", "8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      docker-proxy:
+        condition: service_healthy
+    environment:
+      # docker-py reads DOCKER_HOST when present; points it at the
+      # Tecnativa proxy's unauthenticated TCP endpoint (reachable only
+      # on docker-proxy-net which the builder is the sole client of).
+      DOCKER_HOST: "tcp://docker-proxy:2375"
+    # Additional network — docker-proxy-net is not shared with any other
+    # service, so a builder compromise still cannot reach the raw socket
+    # directly; it can only send API calls that pass through the proxy's
+    # verb allowlist.
+    networks:
+      - platform-net
+      - models-net
+      - docker-proxy-net
     volumes:
       - platform-data:/var/platform-data
-      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz',timeout=2).status==200 else 1)"]
       interval: 15s
