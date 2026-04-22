@@ -64,9 +64,17 @@ def begin(
 
     Returns the MLflow run id on success, None when disabled.
 
-    The experiment is created on demand (set_experiment does CREATE
-    or GET under the hood) so fresh installs work without any manual
-    MLflow setup.
+    Experiment handling is explicit:
+      * if an experiment with ``experiment_name`` already exists, use it;
+      * otherwise create it with ``artifact_location='mlflow-artifacts:/'``
+        so the server's proxied-artifact mode is used.
+
+    That explicit artifact_location matters because ``set_experiment``
+    creates-on-demand with whatever ``--default-artifact-root`` the
+    tracking server was booted with. If the server flipped between
+    ``s3://...`` and ``mlflow-artifacts:/`` across deploys, pre-existing
+    experiments keep their original location and clients hit the wrong
+    endpoint. Setting it explicitly here removes that drift.
     """
     if not _enabled():
         return None
@@ -75,6 +83,17 @@ def begin(
         return None
     try:
         mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+        from mlflow import MlflowClient  # type: ignore[import-not-found]
+
+        client = MlflowClient()
+        exp = client.get_experiment_by_name(experiment_name)
+        if exp is None:
+            client.create_experiment(
+                name=experiment_name,
+                artifact_location="mlflow-artifacts:/",
+            )
+        # set_experiment here is a no-op for routing; we call it so
+        # mlflow's process-wide active-experiment state is primed.
         mlflow.set_experiment(experiment_name)
         active = mlflow.start_run(
             run_name=run_id,
