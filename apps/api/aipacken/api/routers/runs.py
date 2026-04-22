@@ -103,19 +103,15 @@ async def create_run(
                 ),
             )
 
-    # Stash `task` + `hpo` + per-family `roles` inside `hyperparams_json`
-    # under reserved keys so the existing JSONB column carries them without
-    # a DB migration. The worker unpacks them when it builds MODEL_CATALOG /
-    # TRANSFORM_CONFIG for the trainer.
+    # task / hpo / roles land in their own first-class columns now
+    # (migration 0004_run_task_hpo_roles). hyperparams_json stays just for
+    # actual hyperparameter values.
     hp_payload: dict[str, Any] = dict(payload.hyperparams or {})
-    if payload.task is not None:
-        hp_payload["_task"] = payload.task
-    if payload.hpo is not None:
-        hp_payload["_hpo"] = payload.hpo.model_dump(mode="json")
+    roles_payload: dict[str, Any] | None = None
     if payload.transform_config is not None:
         roles = payload.transform_config.get("roles")
         if isinstance(roles, dict) and roles:
-            hp_payload["_roles"] = roles
+            roles_payload = roles
 
     run = Run(
         experiment_id=payload.experiment_id,
@@ -124,6 +120,9 @@ async def create_run(
         model_catalog_id=payload.model_catalog_id,
         hyperparams_json=hp_payload,
         resource_limits_json=payload.resource_limits,
+        task=payload.task,
+        hpo_json=payload.hpo.model_dump(mode="json") if payload.hpo is not None else None,
+        roles_json=roles_payload,
         status="queued",
     )
     db.add(run)

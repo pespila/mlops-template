@@ -113,6 +113,12 @@ class Run(Base, IdMixin, TimestampsMixin):
     resource_limits_json: Mapped[dict[str, Any]] = mapped_column(
         JsonColumn, nullable=False, default=dict
     )
+    # First-class fields that used to live under reserved keys inside
+    # hyperparams_json (_task / _hpo / _roles). Nullable for back-compat
+    # with existing rows; see migration 0004_run_task_hpo_roles.
+    task: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    hpo_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
+    roles_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

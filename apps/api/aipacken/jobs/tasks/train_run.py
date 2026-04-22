@@ -178,13 +178,18 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         dataset_rel = dataset.storage_path
         dataset_filename = Path(dataset_rel).name
 
-        # Unpack the reserved keys the router stashed inside hyperparams_json
-        # (``_task``, ``_hpo``, ``_roles``) so MODEL_CATALOG / TRANSFORM_CONFIG
-        # carry them as first-class fields to the trainer.
+        # task / hpo / roles are first-class columns on Run as of migration
+        # 0004_run_task_hpo_roles. For runs that predate the migration, the
+        # reserved keys may still live inside hyperparams_json — read those
+        # as a fallback so historical runs continue to serve.
         raw_hp = dict(run.hyperparams_json or {})
-        run_task: str | None = raw_hp.pop("_task", None)
-        run_hpo: dict[str, Any] | None = raw_hp.pop("_hpo", None)
-        run_roles: dict[str, Any] | None = raw_hp.pop("_roles", None)
+        run_task: str | None = run.task or raw_hp.pop("_task", None)
+        run_hpo: dict[str, Any] | None = run.hpo_json or raw_hp.pop("_hpo", None)
+        run_roles: dict[str, Any] | None = run.roles_json or raw_hp.pop("_roles", None)
+        # Drop the reserved keys even when new columns had values — they
+        # should never reach the trainer as "hyperparams".
+        for _k in ("_task", "_hpo", "_roles"):
+            raw_hp.pop(_k, None)
         resolved_task = run_task or entry.kind
 
         # User-authored column types (set via PATCH /datasets/{id}/schema/{col}).
