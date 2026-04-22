@@ -31,6 +31,7 @@ dependencies = [
   "httpx-sse==0.4.0",
   "uuid6==2024.7.10",
   "email-validator==2.2.0",
+  "prometheus-fastapi-instrumentator==7.0.0",
 ]
 
 [project.optional-dependencies]

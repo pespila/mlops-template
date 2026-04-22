@@ -145,6 +145,22 @@ def create_app() -> FastAPI:
 
     app.include_router(sse.router, prefix="/sse")
 
+    # Prometheus metrics — /metrics exposes the default http_requests_total
+    # + http_request_duration_seconds plus every router as a label. Addresses
+    # perf.md P0 'No observability at all' as a first deliverable; fuller
+    # OpenTelemetry instrumentation is tracked separately. Metrics are
+    # pulled by Prometheus (or whatever /metrics scraper) over the platform
+    # network; the endpoint itself does not require auth because it only
+    # emits aggregate counters, never per-resource data.
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        should_respect_env_var=False,
+        excluded_handlers=["/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
     return app
 
 
