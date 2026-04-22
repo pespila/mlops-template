@@ -11,6 +11,7 @@ from aipacken.api.authz import is_admin
 from aipacken.api.pagination import Pagination, pagination_params
 from aipacken.api.schemas.models import (
     ModelUpdate,
+    ModelVersionPromote,
     ModelVersionRead,
     RegisteredModelDetail,
     RegisteredModelList,
@@ -193,6 +194,53 @@ async def delete_model(
     await db.delete(rm)
     await db.commit()
     return Response(status_code=204)
+
+
+@router.post(
+    "/{model_id}/versions/{version_id}/promote",
+    response_model=ModelVersionRead,
+)
+async def promote_version(
+    model_id: str,
+    version_id: str,
+    payload: ModelVersionPromote,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> ModelVersionRead:
+    """Move a ModelVersion to a target stage atomically.
+
+    When ``stage=production`` is requested, any existing production version
+    of the same RegisteredModel is first demoted to ``archived`` in the
+    same transaction, then the target is set to production. The partial
+    unique index from migration 0005 also enforces this at the DB level
+    on Postgres.
+    """
+    mv = await db.get(ModelVersion, version_id)
+    if mv is None or mv.registered_model_id != model_id:
+        raise HTTPException(status_code=404, detail="version_not_found")
+
+    target = payload.stage
+    if target == "production":
+        current_prod = (
+            (
+                await db.execute(
+                    select(ModelVersion).where(
+                        ModelVersion.registered_model_id == model_id,
+                        ModelVersion.stage == "production",
+                        ModelVersion.id != version_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for row in current_prod:
+            row.stage = "archived"
+
+    mv.stage = target
+    await db.commit()
+    await db.refresh(mv)
+    return await _enrich_version(db, mv)
 
 
 @router.get("/{model_id}/versions", response_model=list[ModelVersionRead])

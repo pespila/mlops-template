@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
+
+# Four-state stage lifecycle matching what the promote endpoint enforces:
+#   none        — newly registered, never graduated.
+#   staging     — auto-assigned by the trainer on train_run success.
+#   production  — at most one per RegisteredModel (partial unique index).
+#   archived    — previously-production version, retained for rollback.
+ModelStage = Literal["none", "staging", "production", "archived"]
 
 
 class ModelVersionRead(BaseModel):
@@ -32,6 +39,17 @@ class ModelVersionRead(BaseModel):
 class ModelUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+
+
+class ModelVersionPromote(BaseModel):
+    """Target stage for a ModelVersion promotion.
+
+    ``production`` at-most-one enforcement is done atomically server-side:
+    any existing production version of the same RegisteredModel is moved
+    to ``archived`` inside the same transaction as the promotion.
+    """
+
+    stage: ModelStage
 
 
 class RegisteredModelRead(BaseModel):
