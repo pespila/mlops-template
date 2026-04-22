@@ -40,6 +40,9 @@ help:
 	@echo "  make openapi      - Regenerate packages/api-spec/openapi.json"
 	@echo "  make build-bases  - Build trainer_base and serving_base images"
 	@echo "  make config       - Validate docker compose config"
+	@echo "  make backup       - Snapshot Postgres + platform-data to ./backups/<ts>/"
+	@echo "  make restore SRC=./backups/<ts>"
+	@echo "                    - Restore from a backup directory (DESTRUCTIVE)"
 
 .env:
 	@echo "[bootstrap] creating .env from .env.example"
@@ -102,6 +105,15 @@ fmt:
 openapi:
 	$(COMPOSE) exec -T api python -m aipacken.scripts.export_openapi > packages/api-spec/openapi.json
 	cd apps/web && pnpm gen:api
+
+.PHONY: backup
+backup:
+	@./scripts/backup.sh
+
+.PHONY: restore
+restore:
+	@test -n "$(SRC)" || (echo "usage: make restore SRC=./backups/<timestamp>" >&2; exit 2)
+	@./scripts/restore.sh "$(SRC)"
 
 .PHONY: build-bases
 build-bases:

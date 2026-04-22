@@ -70,3 +70,8 @@ cookie.jar
 
 # ---------- Review reports (local only — security findings with file:line anchors) ----------
 docs/review/
+
+# ---------- Local backups ----------
+# `make backup` writes pg_dump + platform-data snapshots here. Keep them
+# off git — they're large and contain your actual data.
+backups/
