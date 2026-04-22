@@ -27,11 +27,7 @@ from aipacken.api.schemas.runs import (
 )
 from aipacken.db import get_db
 from aipacken.db.models import (
-    Artifact,
-    BiasReport,
     Deployment,
-    ExplanationArtifact,
-    Metric,
     ModelVersion,
     Run,
     TransformConfig,
@@ -169,26 +165,11 @@ async def get_run_metrics(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[MetricRead]:
-    await get_owned_run(db, run_id, user)
-
-    # Batch 34 — MLflow read proxy behind MLFLOW_BACKEND=true. MLflow
-    # stores full step-series per metric (what the trainer's
-    # mlflow_sink.log_metric writes via Batch 33); our Metric table
-    # stores one row per JSONL line. When the flag is on, the UI
-    # gets the richer series without schema churn.
+    """Full step-series of metrics for a run — sourced from MLflow."""
     from aipacken.services import mlflow_client
 
-    if mlflow_client.mlflow_enabled():
-        rows_mlflow = mlflow_client.get_run_metrics(run_id)
-        if rows_mlflow:
-            return [MetricRead.model_validate(r) for r in rows_mlflow]
-
-    rows = (
-        (await db.execute(select(Metric).where(Metric.run_id == run_id).order_by(Metric.step)))
-        .scalars()
-        .all()
-    )
-    return [MetricRead.model_validate(r) for r in rows]
+    await get_owned_run(db, run_id, user)
+    return [MetricRead.model_validate(r) for r in mlflow_client.get_run_metrics(run_id)]
 
 
 @router.get("/{run_id}/artifacts", response_model=list[ArtifactRead])
@@ -197,9 +178,11 @@ async def get_run_artifacts(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ArtifactRead]:
+    """Flattened artifact tree for a run — sourced from MLflow."""
+    from aipacken.services import mlflow_client
+
     await get_owned_run(db, run_id, user)
-    rows = (await db.execute(select(Artifact).where(Artifact.run_id == run_id))).scalars().all()
-    return [ArtifactRead.from_row(r) for r in rows]
+    return [ArtifactRead.model_validate(a) for a in mlflow_client.list_run_artifacts(run_id)]
 
 
 @router.get("/{run_id}/explanations")
@@ -208,20 +191,29 @@ async def get_run_explanations(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, object]]:
+    """SHAP / feature-importance JSON — read from the run's MLflow artifacts.
+
+    The trainer writes ``reports/shap.json`` into its local run directory
+    and ``mlflow_sink.log_artifact`` uploads it under
+    ``reports/shap.json`` on the MLflow side. This reader fetches that
+    JSON via MLflow's artifact download.
+    """
+    from aipacken.services import mlflow_client
+
     await get_owned_run(db, run_id, user)
-    rows = (
-        (await db.execute(select(ExplanationArtifact).where(ExplanationArtifact.run_id == run_id)))
-        .scalars()
-        .all()
-    )
+    payload = mlflow_client.read_run_json(run_id, "reports/shap.json")
+    if payload is None:
+        return []
+    # Back-compat shape: caller used to get a list with {id, kind,
+    # feature_importance, artifact_path}. With MLflow as source we
+    # return a single-entry list carrying the feature_importance map.
     return [
         {
-            "id": r.id,
-            "kind": r.kind,
-            "feature_importance": r.feature_importance_json or {},
-            "artifact_path": r.artifact_path,
+            "id": f"{run_id}:shap",
+            "kind": "shap",
+            "feature_importance": payload.get("global_importance", payload),
+            "artifact_path": "reports/shap.json",
         }
-        for r in rows
     ]
 
 
@@ -231,18 +223,37 @@ async def get_run_bias(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, object]]:
+    """Fairness metrics per sensitive feature — from MLflow artifacts.
+
+    The trainer writes one bias report per sensitive feature into
+    ``reports/bias.json``; this reader returns that JSON in the shape
+    the UI already consumes.
+    """
+    from aipacken.services import mlflow_client
+
     await get_owned_run(db, run_id, user)
-    rows = (await db.execute(select(BiasReport).where(BiasReport.run_id == run_id))).scalars().all()
-    return [
-        {
-            "id": r.id,
-            "sensitive_feature": r.sensitive_feature,
-            "metric_name": r.metric_name,
-            "overall_value": r.overall_value,
-            "group_values": r.group_values_json or {},
-        }
-        for r in rows
-    ]
+    payload = mlflow_client.read_run_json(run_id, "reports/bias.json")
+    if payload is None:
+        return []
+    # Support both the legacy single-report shape and any future list.
+    if isinstance(payload, list):
+        groups = payload
+    else:
+        groups = [payload]
+    out: list[dict[str, object]] = []
+    for i, group in enumerate(groups):
+        if not isinstance(group, dict):
+            continue
+        out.append(
+            {
+                "id": f"{run_id}:bias:{i}",
+                "sensitive_feature": group.get("sensitive_feature", ""),
+                "metric_name": group.get("metric") or group.get("metric_name", ""),
+                "overall_value": group.get("overall") or group.get("overall_value"),
+                "group_values": group.get("groups") or group.get("group_values") or {},
+            }
+        )
+    return out
 
 
 @router.get("/{run_id}/selected_hyperparams")
@@ -253,35 +264,19 @@ async def get_run_selected_hyperparams(
 ) -> dict[str, object]:
     """Return the parsed ``selected_hyperparams.json`` artifact for a run.
 
-    Falls back to the raw ``Run.hyperparams_json`` (labelled ``source=legacy``)
-    for runs trained before this artifact was introduced so the Model tab on
-    older runs still renders a useful payload.
+    Primary source is MLflow (the trainer uploads the file under
+    ``artifacts/selected_hyperparams.json``). Falls back to the raw
+    ``Run.hyperparams_json`` (labelled ``source=legacy``) when MLflow
+    has nothing — that's either a pre-MLflow run or one whose trainer
+    failed before writing the artifact.
     """
-    import json
+    from aipacken.services import mlflow_client
 
     run = await get_owned_run(db, run_id, user)
 
-    row = (
-        (
-            await db.execute(
-                select(Artifact).where(
-                    Artifact.run_id == run_id,
-                    Artifact.kind == "selected_hyperparams",
-                )
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if row is not None:
-        try:
-            abs_path = storage.to_absolute(row.uri)
-            if abs_path.exists():
-                return json.loads(abs_path.read_text())
-        except (OSError, ValueError, json.JSONDecodeError):
-            # Fall back to the run.hyperparams_json-based legacy
-            # representation below.
-            pass
+    payload = mlflow_client.read_run_json(run_id, "artifacts/selected_hyperparams.json")
+    if payload is not None:
+        return payload
     return {
         "source": "legacy",
         "model_name": None,

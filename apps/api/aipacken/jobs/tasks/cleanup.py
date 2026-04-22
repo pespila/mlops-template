@@ -7,24 +7,26 @@ import structlog
 from sqlalchemy import delete
 
 from aipacken.config import get_settings
-from aipacken.db.models import Artifact, Prediction
+from aipacken.db.models import Prediction
 
 logger = structlog.get_logger(__name__)
 
 
 async def cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Retention sweep: prune old predictions + dangling docker images.
+
+    Artifact retention is owned by MLflow now (its artifact store + the
+    run lifecycle) — we don't touch that here. Prediction retention stays
+    on this side because predictions live in our DB as the audit log.
+    """
     session_factory = ctx["session_factory"]
     settings = get_settings()
 
     cutoff_preds = datetime.now(UTC) - timedelta(days=settings.prediction_retention_days)
-    cutoff_arts = datetime.now(UTC) - timedelta(days=settings.artifact_retention_days)
 
     async with session_factory() as db:
         pred_deleted = (
             await db.execute(delete(Prediction).where(Prediction.received_at < cutoff_preds))
-        ).rowcount
-        art_deleted = (
-            await db.execute(delete(Artifact).where(Artifact.created_at < cutoff_arts))
         ).rowcount
         await db.commit()
 
@@ -38,5 +40,4 @@ async def cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "predictions_deleted": int(pred_deleted or 0),
-        "artifacts_deleted": int(art_deleted or 0),
     }

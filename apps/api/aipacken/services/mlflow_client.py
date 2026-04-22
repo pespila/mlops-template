@@ -293,6 +293,43 @@ def _walk_artifacts(
         )
 
 
+def read_run_json(platform_run_id: str, artifact_path: str) -> dict[str, Any] | list[Any] | None:
+    """Download + json.load a specific artifact from a platform run.
+
+    Returns None when MLflow is disabled, the run isn't found, the
+    artifact doesn't exist, or the file isn't valid JSON. Used by the
+    routers that serve SHAP / bias / selected_hyperparams straight from
+    the MLflow artifact store instead of the DB.
+    """
+    import json
+    import tempfile
+
+    client = get_client()
+    if client is None:
+        return None
+    run = find_run_by_platform_id(platform_run_id)
+    if run is None:
+        return None
+    try:
+        import mlflow  # type: ignore[import-not-found]
+
+        local = mlflow.artifacts.download_artifacts(
+            run_id=run.info.run_id,
+            artifact_path=artifact_path,
+            dst_path=tempfile.mkdtemp(prefix="aipacken-read-"),
+        )
+        with open(local) as fp:
+            return json.load(fp)
+    except Exception as exc:
+        logger.warning(
+            "mlflow.read_json_failed platform_run_id=%s path=%s error=%s",
+            platform_run_id,
+            artifact_path,
+            exc,
+        )
+        return None
+
+
 def _classify_artifact(name: str) -> tuple[str, str | None]:
     """Mirror the classification rules from jobs/tasks/train_run.py."""
     lower = name.lower()

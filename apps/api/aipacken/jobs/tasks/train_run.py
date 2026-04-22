@@ -1,22 +1,15 @@
-"""Training orchestration — spawns the trainer container, mirrors outputs.
+"""Training orchestration — spawns the trainer container, mirrors model pointer.
 
 The worker spawns a trainer container with the platform-data volume mounted,
-waits for it to exit, then walks the run directory and mirrors:
+waits for it to exit, then:
 
-  metrics.jsonl        -> Metric rows
-  artifacts/*          -> Artifact rows
-  reports/shap.json    -> ExplanationArtifact row
-  reports/bias.json    -> BiasReport rows
-  artifacts/model.pkl  -> RegisteredModel + ModelVersion rows
-
-Each of those five steps commits independently so a later failure doesn't
-roll back earlier successes.
-
-Since Batch 33 the trainer also dual-writes to MLflow via its own
-platform_trainer.mlflow_sink — controlled by the MLFLOW_TRACKING_URI env
-var the worker forwards below. MLflow reads stay off by default; Batch
-34 flips the FastAPI reader proxy when MLFLOW_BACKEND=true, and Batch
-35 cuts the direct DB writes above.
+  * metrics / artifacts / shap / bias       -> authoritative in MLflow
+    (the trainer's mlflow_sink uploaded them during the run; Batch 35a
+    dropped the former DB mirror tables).
+  * artifacts/model.pkl                     -> RegisteredModel + ModelVersion
+    rows still created here so serving containers can mount
+    `/var/platform-data/models/<mv_id>/` as before. Batch 35b moves that
+    last write path into MLflow's model registry.
 """
 
 from __future__ import annotations
@@ -33,13 +26,9 @@ import structlog
 from aipacken import storage
 from aipacken.config import get_settings
 from aipacken.db.models import (
-    Artifact,
-    BiasReport,
     Dataset,
     Experiment,
-    ExplanationArtifact,
     FeatureSchema,
-    Metric,
     ModelCatalogEntry,
     ModelVersion,
     RegisteredModel,
@@ -56,12 +45,25 @@ logger = structlog.get_logger(__name__)
 async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
     """Remove a Run, its on-disk data, and every ModelVersion it produced.
 
-    Metrics, Artifacts, ExplanationArtifact, and BiasReport rows cascade via
-    the FK `ondelete=CASCADE`. RegisteredModel rows are left alone when they
-    still have surviving versions; removed when this run's versions were the
-    last ones.
+    Telemetry (metrics / artifacts / explanations / bias reports) lives in
+    MLflow now — this function also deletes the associated MLflow run so
+    its backing rows and artifact blobs go away together. RegisteredModel
+    rows are left alone when they still have surviving versions; removed
+    when this run's versions were the last ones.
     """
     from sqlalchemy import select as _select
+
+    from aipacken.services import mlflow_client
+
+    # Drop the MLflow run first so a later failure here doesn't leave an
+    # orphan mlflow row pointing at a deleted platform run.
+    try:
+        client = mlflow_client.get_client()
+        run_obj = mlflow_client.find_run_by_platform_id(run_id)
+        if client is not None and run_obj is not None:
+            client.delete_run(run_obj.info.run_id)
+    except Exception as exc:
+        logger.warning("train_run.mlflow_delete_failed", run_id=run_id, error=str(exc))
 
     run = await db.get(Run, run_id)
     if run is None:
@@ -340,7 +342,6 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
 
     run_root = storage.run_dir(run_id)
     artifacts_root = storage.run_artifacts_dir(run_id)
-    reports_root = storage.run_reports_dir(run_id)
     logs_path = storage.run_logs_path(run_id)
 
     # Persist the captured log transcript to the volume before we exit the
@@ -356,21 +357,11 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         if run is None:
             return {"status": "missing"}
 
-        if logs_path.exists():
-            try:
-                db.add(
-                    Artifact(
-                        run_id=run_id,
-                        kind="logs",
-                        name="training.log",
-                        uri=storage.to_relative(logs_path),
-                        size_bytes=logs_path.stat().st_size,
-                        content_type="text/plain",
-                    )
-                )
-                await db.commit()
-            except Exception as exc:
-                logger.warning("train_run.log_artifact_failed", error=str(exc))
+        # Training logs no longer create an Artifact row (table dropped
+        # in migration 0007_mlflow_a). The trainer's mlflow_sink already
+        # uploaded `reports/` + `artifacts/` + `metrics.jsonl` to MLflow
+        # on the success path; the logs_path file on disk is still
+        # served directly by the SSE log endpoint for live viewing.
 
         if exit_code != 0:
             run.status = "failed"
@@ -383,141 +374,35 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         run.finished_at = datetime.now(UTC)
         await db.commit()
 
-    # --- Step 1: metrics -----------------------------------------------------
-    metrics_path = storage.run_metrics_path(run_id)
-    if metrics_path.exists():
-        try:
-            rows: list[dict[str, Any]] = []
-            for raw in metrics_path.read_text().splitlines():
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    rows.append(json.loads(raw))
-                except json.JSONDecodeError:
-                    continue
-            async with session_factory() as db2:
-                for row in rows:
-                    name = str(row.get("name", "")).strip()
-                    if not name:
-                        continue
-                    try:
-                        value = float(row.get("value"))
-                    except (TypeError, ValueError):
-                        continue
-                    db2.add(
-                        Metric(
-                            run_id=run_id,
-                            name=name,
-                            value=value,
-                            step=int(row["step"]) if "step" in row else None,
-                            phase=row.get("phase"),
-                        )
-                    )
-                await db2.commit()
-        except Exception as exc:
-            logger.warning("train_run.metric_sync_failed", error=str(exc))
-
-    # --- Step 2: artifacts + model pointer -----------------------------------
+    # --- Metrics / artifacts / SHAP / bias ----------------------------------
+    # All of these are authoritative in MLflow now (migration 0007_mlflow_a
+    # dropped the Metric, Artifact, BiasReport, ExplanationArtifact tables).
+    # The trainer's mlflow_sink uploaded metrics.jsonl + artifacts/* +
+    # reports/* to MLflow on the success path. Readers hit MLflow via
+    # aipacken.services.mlflow_client.
+    #
+    # We still need to discover model_artifact_rel + model_kind for the
+    # RegisteredModel + ModelVersion writes below (Batch 35b will move
+    # those to MLflow's model registry — kept on the DB for now so the
+    # serving containers keep booting against models/<mv_id>/).
     model_artifact_rel: str | None = None
     model_kind = "sklearn"
     if artifacts_root.exists():
-        try:
-            async with session_factory() as db2:
-                for entry_path in sorted(artifacts_root.iterdir()):
-                    kind, content_type = _classify_artifact(entry_path.name)
-                    if entry_path.is_dir():
-                        # AutoGluon predictor directory — treat as a single "model" artifact.
-                        if kind == "file":
-                            kind = "model"
-                            content_type = "application/x-directory"
-                        if kind == "model":
-                            model_artifact_rel = storage.to_relative(entry_path)
-                            model_kind = (
-                                "autogluon" if "autogluon" in entry_path.name.lower() else "sklearn"
-                            )
-                        total = sum(p.stat().st_size for p in entry_path.rglob("*") if p.is_file())
-                        db2.add(
-                            Artifact(
-                                run_id=run_id,
-                                kind=kind,
-                                name=entry_path.name,
-                                uri=storage.to_relative(entry_path),
-                                size_bytes=total,
-                                content_type=content_type,
-                            )
-                        )
-                        continue
-                    if kind == "model" and model_artifact_rel is None:
-                        model_artifact_rel = storage.to_relative(entry_path)
-                    db2.add(
-                        Artifact(
-                            run_id=run_id,
-                            kind=kind,
-                            name=entry_path.name,
-                            uri=storage.to_relative(entry_path),
-                            size_bytes=entry_path.stat().st_size,
-                            content_type=content_type,
-                        )
+        for entry_path in sorted(artifacts_root.iterdir()):
+            kind, _ = _classify_artifact(entry_path.name)
+            if entry_path.is_dir():
+                if kind == "file":
+                    kind = "model"
+                if kind == "model":
+                    model_artifact_rel = storage.to_relative(entry_path)
+                    model_kind = (
+                        "autogluon" if "autogluon" in entry_path.name.lower() else "sklearn"
                     )
-                await db2.commit()
-        except Exception as exc:
-            logger.warning("train_run.artifact_sync_failed", error=str(exc))
+                continue
+            if kind == "model" and model_artifact_rel is None:
+                model_artifact_rel = storage.to_relative(entry_path)
 
-    # --- Step 3: SHAP --------------------------------------------------------
-    shap_report_path = reports_root / "shap.json"
-    if shap_report_path.exists():
-        try:
-            shap_doc = json.loads(shap_report_path.read_text())
-            async with session_factory() as db2:
-                db2.add(
-                    ExplanationArtifact(
-                        run_id=run_id,
-                        kind="shap_global",
-                        feature_importance_json=shap_doc.get("global_importance", {}),
-                        artifact_path=storage.to_relative(shap_report_path),
-                    )
-                )
-                await db2.commit()
-        except Exception as exc:
-            logger.info("train_run.shap_sync_failed", error=str(exc))
-
-    # --- Step 4: bias --------------------------------------------------------
-    bias_report_path = reports_root / "bias.json"
-    if bias_report_path.exists():
-        try:
-            bias_doc = json.loads(bias_report_path.read_text())
-            groups = bias_doc.get("groups") or {}
-            overall = bias_doc.get("overall")
-            overall_scalar = float(overall) if isinstance(overall, (int, float)) else None
-            # Prefer the sensitive column names the trainer stamped; fall back
-            # to "combined" so we never blow past the VARCHAR(255) limit with
-            # joined group labels like "4.3|2.0|1.1|0.1,..." .
-            sens_cols = bias_doc.get("sensitive_features") or []
-            sens_label = (",".join(str(c) for c in sens_cols))[:255] if sens_cols else "combined"
-            async with session_factory() as db2:
-                db2.add(
-                    BiasReport(
-                        run_id=run_id,
-                        sensitive_feature=sens_label,
-                        metric_name=str(bias_doc.get("metric") or "accuracy"),
-                        group_values_json={
-                            "groups": groups,
-                            "deltas": bias_doc.get("deltas") or {},
-                            "overall": overall,
-                            "sensitive_features": sens_cols,
-                            "groups_truncated": bias_doc.get("groups_truncated", False),
-                            "groups_total": bias_doc.get("groups_total"),
-                        },
-                        overall_value=overall_scalar,
-                        report_path=storage.to_relative(bias_report_path),
-                    )
-                )
-                await db2.commit()
-        except Exception as exc:
-            logger.info("train_run.bias_sync_failed", error=str(exc))
-
-    # --- Step 5: RegisteredModel + ModelVersion ------------------------------
+    # --- RegisteredModel + ModelVersion ------------------------------
     if model_artifact_rel:
         try:
             async with session_factory() as db2:

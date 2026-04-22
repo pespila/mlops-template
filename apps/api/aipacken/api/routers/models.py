@@ -22,7 +22,6 @@ from aipacken.db.models import (
     Dataset,
     Deployment,
     Experiment,
-    Metric,
     ModelCatalogEntry,
     ModelVersion,
     RegisteredModel,
@@ -35,7 +34,14 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 
 async def _enrich_version(db: AsyncSession, v: ModelVersion) -> ModelVersionRead:
-    """Fold metrics + dataset + catalog name onto a ModelVersionRead."""
+    """Fold metrics + dataset + catalog name onto a ModelVersionRead.
+
+    Metrics come from MLflow (table was dropped in migration 0007_mlflow_a);
+    dataset + catalog_name still come from the DB since those identify the
+    trainer-input linkage the UI displays on the version card.
+    """
+    from aipacken.services import mlflow_client
+
     mv = ModelVersionRead.model_validate(v)
     run = await db.get(Run, v.run_id)
     if run is not None:
@@ -48,10 +54,13 @@ async def _enrich_version(db: AsyncSession, v: ModelVersion) -> ModelVersionRead
         if entry is not None:
             mv.model_catalog_name = entry.name
 
-    metric_rows = (
-        (await db.execute(select(Metric).where(Metric.run_id == v.run_id))).scalars().all()
-    )
-    mv.metrics = {m.name: float(m.value) for m in metric_rows}
+    metric_rows = mlflow_client.get_run_metrics(v.run_id)
+    # MLflow history gives us every (name, step, value); keep the latest
+    # per metric for the compact dict the ModelVersionRead card renders.
+    latest: dict[str, float] = {}
+    for row in metric_rows:
+        latest[row["name"]] = float(row["value"])
+    mv.metrics = latest
     return mv
 
 

@@ -129,28 +129,10 @@ class Run(Base, IdMixin, TimestampsMixin):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class Metric(Base, IdMixin, TimestampsMixin):
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    value: Mapped[float] = mapped_column(Float, nullable=False)
-    step: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
-
-
-class Artifact(Base, IdMixin, TimestampsMixin):
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Relative path inside /var/platform-data (e.g. `runs/{id}/artifacts/model.pkl`).
-    # Column is named `uri` for backwards-compat with existing code paths that
-    # read `.uri`; conceptually it's a `storage_path`.
-    uri: Mapped[str] = mapped_column(String(1024), nullable=False)
-    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+# Metric + Artifact tables were dropped in migration 0007_mlflow_a — MLflow
+# owns run metrics (with full step-series) and artifact storage (via MinIO).
+# Reads: aipacken.services.mlflow_client.get_run_metrics / list_run_artifacts.
+# Writes: trainer_base/platform_trainer/mlflow_sink.py.
 
 
 class RegisteredModel(Base, IdMixin, TimestampsMixin):
@@ -218,42 +200,11 @@ class Prediction(Base, IdMixin):
     __table_args__ = (Index("ix_prediction_deployment_received", "deployment_id", "received_at"),)
 
 
-class DataLineage(Base, IdMixin, TimestampsMixin):
-    upstream_dataset_id: Mapped[str] = mapped_column(
-        ForeignKey("datasets.id"), nullable=False, index=True
-    )
-    downstream_dataset_id: Mapped[str | None] = mapped_column(
-        ForeignKey("datasets.id"), nullable=True
-    )
-    transform_config_id: Mapped[str | None] = mapped_column(
-        ForeignKey("transform_configs.id"), nullable=True
-    )
-    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-class BiasReport(Base, IdMixin, TimestampsMixin):
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    sensitive_feature: Mapped[str] = mapped_column(String(255), nullable=False)
-    metric_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    group_values_json: Mapped[dict[str, Any]] = mapped_column(
-        JsonColumn, nullable=False, default=dict
-    )
-    overall_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-
-
-class ExplanationArtifact(Base, IdMixin, TimestampsMixin):
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    feature_importance_json: Mapped[dict[str, Any] | None] = mapped_column(
-        JsonColumn, nullable=True
-    )
-    artifact_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+# DataLineage, BiasReport, ExplanationArtifact were dropped in migration
+# 0007_mlflow_a. DataLineage was dead schema (never populated). Bias and
+# SHAP are emitted by the trainer as JSON artifacts (reports/bias.json /
+# reports/shap.json) and read back via mlflow_client helpers, avoiding
+# the duplication the code review flagged.
 
 
 class ModelPackage(Base, IdMixin, TimestampsMixin):
@@ -274,10 +225,5 @@ class ModelPackage(Base, IdMixin, TimestampsMixin):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class BuildJob(Base, IdMixin, TimestampsMixin):
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    tag: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
-    image_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    related_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+# BuildJob was dropped in migration 0007_mlflow_a — dead schema, never
+# populated by any code path.

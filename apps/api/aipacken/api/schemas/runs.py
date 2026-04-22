@@ -112,8 +112,10 @@ class MetricRead(BaseModel):
 class ArtifactRead(BaseModel):
     """Frontend-facing artifact row.
 
-    The DB column is still named `uri` for historical reasons but it stores a
-    relative path under `/var/platform-data`. `download_url` is computed.
+    Post-MLflow cutover: ``uri`` is the ``mlflow-artifacts:/<run_id>/<path>``
+    URI returned by the mlflow_client adapter. ``download_url`` is computed
+    at model_validate time and proxies through the api so the SPA does not
+    talk to MLflow directly.
     """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -127,8 +129,8 @@ class ArtifactRead(BaseModel):
     content_type: str | None = None
     download_url: str = Field(default="")
 
-    @classmethod
-    def from_row(cls, row: Any) -> ArtifactRead:
-        data = cls.model_validate(row)
-        data.download_url = f"/api/artifacts/{data.id}/download"
-        return data
+    def model_post_init(self, __context: Any) -> None:
+        if not self.download_url:
+            # artifact id from mlflow_client is f"{mlflow_run_id}:{path}".
+            # Route through the api so SPA never hits MLflow directly.
+            self.download_url = f"/api/artifacts/download?id={self.id}"

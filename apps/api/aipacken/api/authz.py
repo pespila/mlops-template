@@ -2,9 +2,13 @@
 
 AIpacken resources trace back to a User. Direct ownership via ``user_id``:
 Dataset, TransformConfig, Experiment. Derived ownership via parent chains:
-Run → Experiment, Artifact/Metric/BiasReport/ExplanationArtifact → Run,
-ModelVersion → Run, Deployment → ModelVersion, Prediction → Deployment,
-ModelPackage → ModelVersion.
+Run → Experiment, ModelVersion → Run, Deployment → ModelVersion,
+Prediction → Deployment, ModelPackage → ModelVersion.
+
+Run telemetry (metrics, artifacts, explanations, bias reports) lives in
+MLflow now; authorization for those goes through ``get_owned_run`` — the
+artifact download endpoint resolves the MLflow run's platform.run_id tag
+and calls that helper.
 
 ``RegisteredModel`` and ``ModelCatalogEntry`` are shared-namespace resources
 (no ``user_id`` on their schema today): any authenticated user can list and
@@ -27,7 +31,6 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken.db.models import (
-    Artifact,
     Dataset,
     Deployment,
     Experiment,
@@ -127,20 +130,6 @@ async def get_owned_run(
     if await _run_owner_id(db, r) != user.id:
         raise HTTPException(status_code=404, detail=detail)
     return r
-
-
-async def get_owned_artifact(
-    db: AsyncSession, artifact_id: str, user: User, *, detail: str = "artifact_not_found"
-) -> Artifact:
-    art = await db.get(Artifact, artifact_id)
-    if art is None:
-        raise HTTPException(status_code=404, detail=detail)
-    if is_admin(user):
-        return art
-    run = await db.get(Run, art.run_id)
-    if run is None or await _run_owner_id(db, run) != user.id:
-        raise HTTPException(status_code=404, detail=detail)
-    return art
 
 
 async def get_owned_model_version(
