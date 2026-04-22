@@ -4,7 +4,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/atoms/Button";
 import { useT } from "@/i18n";
-import { api, type ModelCatalogEntry, type TaskKind } from "@/lib/api/client";
+import {
+  api,
+  type CreateRunInput,
+  type ModelCatalogEntry,
+  type TaskKind,
+} from "@/lib/api/client";
 import { cn } from "@/lib/cn";
 import { useWizardStore, type HpoSearchEntry } from "@/state/wizardStore";
 
@@ -33,18 +38,28 @@ const METRIC_CHOICES_BY_TASK: Record<TaskKind, string[]> = {
   regression: ["r2", "mae"],
   binary_classification: ["auroc", "accuracy", "f1_macro"],
   multiclass_classification: ["accuracy", "auroc", "f1_macro"],
+  forecasting: ["mae", "rmse", "smape"],
+  recommender: ["rmse", "mae", "precision_at_10", "ndcg_at_10"],
+  clustering: ["silhouette", "calinski_harabasz", "davies_bouldin"],
 };
 
 const METRIC_DIRECTION: Record<string, "maximize" | "minimize"> = {
   r2: "maximize",
   mae: "minimize",
+  rmse: "minimize",
+  smape: "minimize",
   accuracy: "maximize",
   auroc: "maximize",
   f1_macro: "maximize",
+  precision_at_10: "maximize",
+  ndcg_at_10: "maximize",
+  silhouette: "maximize",
+  calinski_harabasz: "maximize",
+  davies_bouldin: "minimize",
 };
 
 function PointField({
-  name,
+  name: _name,
   spec,
   value,
   onChange,
@@ -101,7 +116,7 @@ function PointField({
 }
 
 function RangeField({
-  name,
+  name: _name,
   spec,
   entry,
   onChange,
@@ -245,6 +260,13 @@ export function StepHyperparameters() {
   const hpModes = useWizardStore((s) => s.hpModes);
   const setHpMode = useWizardStore((s) => s.setHpMode);
   const task = useWizardStore((s) => s.task);
+  const taskFamily = useWizardStore((s) => s.taskFamily);
+  const timeColumn = useWizardStore((s) => s.timeColumn);
+  const forecastHorizon = useWizardStore((s) => s.forecastHorizon);
+  const userColumn = useWizardStore((s) => s.userColumn);
+  const itemColumn = useWizardStore((s) => s.itemColumn);
+  const ratingColumn = useWizardStore((s) => s.ratingColumn);
+  const feedbackType = useWizardStore((s) => s.feedbackType);
   const experimentName = useWizardStore((s) => s.experimentName);
   const setExperimentName = useWizardStore((s) => s.setExperimentName);
   const experimentId = useWizardStore((s) => s.experimentId);
@@ -299,8 +321,20 @@ export function StepHyperparameters() {
 
   const startRun = useMutation({
     mutationFn: async () => {
-      if (!datasetId || !target || !modelCatalogId) {
+      const family = taskFamily ?? "supervised";
+      if (!datasetId || !modelCatalogId) {
         throw new Error("Wizard incomplete");
+      }
+      // Per-family prerequisites — supervised + forecasting need a target;
+      // clustering has no target; recommender needs the user/item/rating trio.
+      if (family === "supervised" && !target) {
+        throw new Error("Wizard incomplete: target column");
+      }
+      if (family === "forecasting" && (!target || !timeColumn)) {
+        throw new Error("Wizard incomplete: time + value columns");
+      }
+      if (family === "recommender" && (!userColumn || !itemColumn || !ratingColumn)) {
+        throw new Error("Wizard incomplete: user / item / rating columns");
       }
       let expId = experimentMode === "existing" ? experimentId : null;
       if (!expId) {
@@ -310,10 +344,17 @@ export function StepHyperparameters() {
         expId = exp.id;
       }
 
+      // "keep" and "date-features" map to no op — the trainer's smart-default
+      // branch handles those columns (passthrough / datetime expansion).
+      // Routing datetime expansion through smart defaults keeps the wizard
+      // compatible with trainer images built before the `date_features` op
+      // landed.
       const kindToOp: Record<string, string> = {
         drop: "drop",
         standardize: "standard_scale",
         "one-hot": "one_hot",
+        ordinal: "ordinal",
+        label: "label",
         "impute-mean": "impute_mean",
         "impute-median": "impute_median",
         "impute-mode": "impute_mode",
@@ -328,17 +369,49 @@ export function StepHyperparameters() {
         test: split.test / 100,
       };
 
+      // Build the transform_config — supervised uses `target`, clustering has
+      // no target (backend accepts null), forecasting uses target=value col +
+      // a `time_column` side-channel, recommender uses the user/item/rating
+      // trio instead of a target. Any role-specific columns go into
+      // `roles_json` so the trainer reads them independently of `target`.
+      const transformConfig: Record<string, unknown> = {
+        target: family === "recommender" ? null : family === "clustering" ? null : target,
+        transforms: transformList,
+        split: splitFractions,
+        sensitive_features: sensitiveFeatures,
+      };
+      if (family === "forecasting") {
+        transformConfig.roles = {
+          family,
+          time_column: timeColumn,
+          target_column: target,
+          horizon: forecastHorizon,
+        };
+      } else if (family === "recommender") {
+        transformConfig.roles = {
+          family,
+          user_column: userColumn,
+          item_column: itemColumn,
+          rating_column: ratingColumn,
+          feedback_type: feedbackType,
+        };
+      } else if (family === "clustering") {
+        transformConfig.roles = { family };
+      }
+
       const payload: Record<string, unknown> = {
         experiment_id: expId,
         dataset_id: datasetId,
-        transform_config: {
-          target,
-          transforms: transformList,
-          split: splitFractions,
-          sensitive_features: sensitiveFeatures,
-        },
+        transform_config: transformConfig,
         model_catalog_id: modelCatalogId,
-        task,
+        task:
+          family === "clustering"
+            ? "clustering"
+            : family === "forecasting"
+              ? "forecasting"
+              : family === "recommender"
+                ? "recommender"
+                : task,
       };
 
       // Filter out hyperparameters whose row is set to "default" — omitting
@@ -386,7 +459,7 @@ export function StepHyperparameters() {
         payload.hyperparams = pointHp;
       }
 
-      const run = await api.runs.create(payload);
+      const run = await api.runs.create(payload as unknown as CreateRunInput);
       return { run, experimentId: expId };
     },
     onSuccess: ({ run }) => {

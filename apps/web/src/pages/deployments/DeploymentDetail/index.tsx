@@ -83,8 +83,12 @@ export function DeploymentDetail() {
           <EditableHeading
             className="flex-1"
             value={deployment.data?.name ?? "Deployment"}
-            onSave={(next) => rename.mutateAsync(next)}
-            onDelete={() => remove.mutateAsync()}
+            onSave={async (next) => {
+              await rename.mutateAsync(next);
+            }}
+            onDelete={async () => {
+              await remove.mutateAsync();
+            }}
             deleteConfirm="Delete this deployment? The serving container will be stopped immediately."
             saving={rename.isPending}
             deleting={remove.isPending}

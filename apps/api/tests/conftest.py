@@ -8,6 +8,13 @@ from unittest.mock import AsyncMock
 
 os.environ.setdefault("PLATFORM_SECRET_KEY", "x" * 64)
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+# Pin the admin identity to what the tests assert against — the dev `.env`
+# in the repo ships `PLATFORM_ADMIN_EMAIL=admin@aipacken.local`, which
+# pydantic-settings would otherwise pick up and cause every auth'd test to
+# 401 on the hard-coded `admin@local`. Use explicit assignment, not
+# setdefault, so we beat the .env value that's already in process env.
+os.environ["PLATFORM_ADMIN_EMAIL"] = "admin@local"
+os.environ["PLATFORM_ADMIN_PASSWORD"] = "change-me"
 # Redirect the platform data volume to a per-pytest temp dir so tests that touch
 # the filesystem don't need a real Docker volume.
 _TEST_DATA_ROOT = tempfile.mkdtemp(prefix="aipacken-test-")
@@ -64,19 +71,34 @@ async def client(session_factory: Any, monkeypatch: pytest.MonkeyPatch) -> Async
 
     monkeypatch.setattr(main_module, "SessionLocal", session_factory)
 
-    # Disable Arq enqueue during tests — replaced with an AsyncMock.
+    # Disable Arq enqueue during tests — replaced with an AsyncMock. Routers
+    # pull `enqueue` in as `from aipacken.jobs.queue import enqueue`, which
+    # binds it locally, so we need to patch both the source module AND every
+    # router's local binding (otherwise the real enqueue fires → opens a
+    # Redis connection → "Event loop is closed" noise at teardown).
     from aipacken.jobs import queue as queue_module
+    from aipacken.api.routers import datasets as _rd_datasets
+    from aipacken.api.routers import deployments as _rd_deployments
+    from aipacken.api.routers import packages as _rd_packages
+    from aipacken.api.routers import runs as _rd_runs
 
-    monkeypatch.setattr(queue_module, "enqueue", AsyncMock(return_value="job-stub"))
+    _enqueue_stub = AsyncMock(return_value="job-stub")
+    monkeypatch.setattr(queue_module, "enqueue", _enqueue_stub)
+    for _mod in (_rd_datasets, _rd_deployments, _rd_packages, _rd_runs):
+        monkeypatch.setattr(_mod, "enqueue", _enqueue_stub)
 
-    from aipacken.main import create_app
+    from aipacken.main import create_app, lifespan
 
     app = create_app()
     app.dependency_overrides[get_db] = _override_get_db
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
+    # httpx ASGITransport doesn't drive ASGI lifespan events, so seed_admin /
+    # seed_catalog in the app's lifespan never fire. Enter the lifespan
+    # context manually so the test DB is populated before requests land.
+    async with lifespan(app):
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
 
 
 @pytest_asyncio.fixture

@@ -10,6 +10,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
+from aipacken.api.authz import (
+    get_owned_deployment,
+    get_owned_model_version,
+    scope_deployment_by_user,
+)
 from aipacken.api.schemas.deployments import (
     DeploymentCreate,
     DeploymentList,
@@ -43,6 +48,8 @@ async def create_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentRead:
+    # Deploying someone else's model version is an IDOR otherwise.
+    await get_owned_model_version(db, payload.model_version_id, user)
     dep = Deployment(
         model_version_id=payload.model_version_id,
         name=payload.name,
@@ -62,10 +69,12 @@ async def create_deployment(
 async def list_deployments(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> DeploymentList:
-    rows = (
-        await db.execute(select(Deployment).order_by(Deployment.created_at.desc()))
-    ).scalars().all()
-    total = (await db.execute(select(func.count()).select_from(Deployment))).scalar_one()
+    stmt = scope_deployment_by_user(select(Deployment), user).order_by(
+        Deployment.created_at.desc()
+    )
+    count_stmt = scope_deployment_by_user(select(func.count(Deployment.id)), user)
+    rows = (await db.execute(stmt)).scalars().all()
+    total = (await db.execute(count_stmt)).scalar_one()
     return DeploymentList(items=[_to_read(r) for r in rows], total=total)
 
 
@@ -75,9 +84,7 @@ async def get_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentRead:
-    dep = await db.get(Deployment, deployment_id)
-    if dep is None:
-        raise HTTPException(status_code=404, detail="deployment_not_found")
+    dep = await get_owned_deployment(db, deployment_id, user)
     return _to_read(dep)
 
 
@@ -88,9 +95,7 @@ async def update_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentRead:
-    dep = await db.get(Deployment, deployment_id)
-    if dep is None:
-        raise HTTPException(status_code=404, detail="deployment_not_found")
+    dep = await get_owned_deployment(db, deployment_id, user)
     if payload.name is not None:
         name = payload.name.strip()
         if not name:
@@ -110,9 +115,7 @@ async def delete_deployment(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Stop the serving container (best-effort) and remove the row."""
-    dep = await db.get(Deployment, deployment_id)
-    if dep is None:
-        raise HTTPException(status_code=404, detail="deployment_not_found")
+    dep = await get_owned_deployment(db, deployment_id, user)
 
     if dep.container_id:
         from aipacken.docker_client.builder_client import get_builder_client
@@ -140,9 +143,7 @@ async def get_deployment_schema(
     so any feature-name normalization it does shows up in the UI. Falls
     back to the trainer-produced `input_schema.json` on disk.
     """
-    dep = await db.get(Deployment, deployment_id)
-    if dep is None:
-        raise HTTPException(status_code=404, detail="deployment_not_found")
+    dep = await get_owned_deployment(db, deployment_id, user)
 
     if dep.status == "active" and dep.internal_url:
         try:
@@ -186,9 +187,7 @@ async def get_deployment_logs(
     import json as _json
     from datetime import datetime as _dt, timezone as _tz
 
-    dep = await db.get(Deployment, deployment_id)
-    if dep is None:
-        raise HTTPException(status_code=404, detail="deployment_not_found")
+    dep = await get_owned_deployment(db, deployment_id, user)
     if not dep.container_id:
         return []
 
@@ -231,9 +230,7 @@ async def predict(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PredictResponse:
-    dep = await db.get(Deployment, deployment_id)
-    if dep is None:
-        raise HTTPException(status_code=404, detail="deployment_not_found")
+    dep = await get_owned_deployment(db, deployment_id, user)
     if dep.status != "active" or not dep.internal_url:
         raise HTTPException(status_code=409, detail="deployment_not_ready")
 

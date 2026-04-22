@@ -5,9 +5,9 @@ import shutil
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from aipacken import storage
+from aipacken.api.authz import is_admin
 from aipacken.api.schemas.models import (
     ModelUpdate,
     ModelVersionRead,
@@ -19,6 +19,7 @@ from aipacken.db import get_db
 from aipacken.db.models import (
     Dataset,
     Deployment,
+    Experiment,
     Metric,
     ModelCatalogEntry,
     ModelVersion,
@@ -26,7 +27,7 @@ from aipacken.db.models import (
     Run,
     User,
 )
-from aipacken.services.auth import get_current_user
+from aipacken.services.auth import get_current_user, require_admin
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -71,16 +72,22 @@ async def get_model(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RegisteredModelDetail:
-    rm = (
-        await db.execute(
-            select(RegisteredModel)
-            .options(selectinload(RegisteredModel.versions))
-            .where(RegisteredModel.id == model_id)
-        )
-    ).scalar_one_or_none()
+    rm = await db.get(RegisteredModel, model_id)
     if rm is None:
         raise HTTPException(status_code=404, detail="model_not_found")
-    versions = [await _enrich_version(db, v) for v in rm.versions]
+
+    # RegisteredModel is a shared namespace, but versions are owner-scoped:
+    # filter `versions` down to those whose source Run sits in an Experiment
+    # owned by the current user (admins see everything).
+    stmt = select(ModelVersion).where(ModelVersion.registered_model_id == model_id)
+    if not is_admin(user):
+        stmt = (
+            stmt.join(Run, ModelVersion.run_id == Run.id)
+            .join(Experiment, Run.experiment_id == Experiment.id)
+            .where(Experiment.user_id == user.id)
+        )
+    version_rows = (await db.execute(stmt)).scalars().all()
+    versions = [await _enrich_version(db, v) for v in version_rows]
     return RegisteredModelDetail(
         id=rm.id,
         name=rm.name,
@@ -95,7 +102,8 @@ async def get_model(
 async def update_model(
     model_id: str,
     payload: ModelUpdate,
-    user: User = Depends(get_current_user),
+    # RegisteredModel is a shared resource; only admins mutate its metadata.
+    user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> RegisteredModel:
     rm = await db.get(RegisteredModel, model_id)
@@ -116,7 +124,9 @@ async def update_model(
 @router.delete("/{model_id}", status_code=204, response_class=Response)
 async def delete_model(
     model_id: str,
-    user: User = Depends(get_current_user),
+    # Deleting a shared RegisteredModel wipes versions created by multiple
+    # users. Admin-only until the model schema gains tenant ownership.
+    user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """Delete a registered model and every version under it.
@@ -175,11 +185,16 @@ async def list_versions(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ModelVersionRead]:
-    rows = (
-        await db.execute(
-            select(ModelVersion)
-            .where(ModelVersion.registered_model_id == model_id)
-            .order_by(ModelVersion.created_at.desc())
+    stmt = (
+        select(ModelVersion)
+        .where(ModelVersion.registered_model_id == model_id)
+        .order_by(ModelVersion.created_at.desc())
+    )
+    if not is_admin(user):
+        stmt = (
+            stmt.join(Run, ModelVersion.run_id == Run.id)
+            .join(Experiment, Run.experiment_id == Experiment.id)
+            .where(Experiment.user_id == user.id)
         )
-    ).scalars().all()
+    rows = (await db.execute(stmt)).scalars().all()
     return [await _enrich_version(db, v) for v in rows]

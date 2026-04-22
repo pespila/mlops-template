@@ -7,6 +7,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
+from aipacken.api.authz import (
+    get_owned_dataset,
+    get_owned_experiment,
+    get_owned_run,
+    get_owned_transform_config,
+    scope_run_by_user,
+)
 from aipacken.api.schemas.runs import (
     ArtifactRead,
     MetricRead,
@@ -39,6 +46,13 @@ async def create_run(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Run:
+    # Enforce ownership of every referenced resource before we create the run.
+    # Each helper 404s if the resource is missing OR owned by someone else.
+    await get_owned_experiment(db, payload.experiment_id, user)
+    await get_owned_dataset(db, payload.dataset_id, user)
+    if payload.transform_config_id is not None:
+        await get_owned_transform_config(db, payload.transform_config_id, user)
+
     transform_config_id = payload.transform_config_id
     if transform_config_id is None:
         if payload.transform_config is None:
@@ -47,10 +61,14 @@ async def create_run(
                 detail="either transform_config_id or transform_config must be provided",
             )
         sens = payload.transform_config.get("sensitive_features") or []
+        raw_target = payload.transform_config.get("target")
         tc = TransformConfig(
             dataset_id=payload.dataset_id,
             user_id=user.id,
-            target_column=str(payload.transform_config.get("target", "")),
+            # target is optional for clustering / recommender / forecasting
+            # (those stash role columns under transform_config.roles). Keep
+            # the column non-null in the DB — empty string signals "none".
+            target_column=str(raw_target) if raw_target else "",
             transforms_json=payload.transform_config.get("transforms") or [],
             split_json=payload.transform_config.get("split") or {},
             sensitive_features=[str(c) for c in sens] if isinstance(sens, list) else [],
@@ -80,14 +98,19 @@ async def create_run(
                 ),
             )
 
-    # Stash `task` + `hpo` inside `hyperparams_json` under reserved keys so
-    # the existing JSONB column carries them without a DB migration. The
-    # worker unpacks them when it builds MODEL_CATALOG for the trainer.
+    # Stash `task` + `hpo` + per-family `roles` inside `hyperparams_json`
+    # under reserved keys so the existing JSONB column carries them without
+    # a DB migration. The worker unpacks them when it builds MODEL_CATALOG /
+    # TRANSFORM_CONFIG for the trainer.
     hp_payload: dict[str, Any] = dict(payload.hyperparams or {})
     if payload.task is not None:
         hp_payload["_task"] = payload.task
     if payload.hpo is not None:
         hp_payload["_hpo"] = payload.hpo.model_dump(mode="json")
+    if payload.transform_config is not None:
+        roles = payload.transform_config.get("roles")
+        if isinstance(roles, dict) and roles:
+            hp_payload["_roles"] = roles
 
     run = Run(
         experiment_id=payload.experiment_id,
@@ -111,9 +134,12 @@ async def list_runs(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunList:
-    stmt = select(Run).order_by(Run.created_at.desc())
-    count_stmt = select(func.count()).select_from(Run)
+    stmt = scope_run_by_user(select(Run), user).order_by(Run.created_at.desc())
+    count_stmt = scope_run_by_user(select(func.count(Run.id)), user)
     if experiment_id:
+        # If an experiment is supplied, verify the user owns it first so we
+        # don't silently return an empty list for a typo vs a cross-tenant probe.
+        await get_owned_experiment(db, experiment_id, user)
         stmt = stmt.where(Run.experiment_id == experiment_id)
         count_stmt = count_stmt.where(Run.experiment_id == experiment_id)
     rows = (await db.execute(stmt)).scalars().all()
@@ -127,10 +153,7 @@ async def get_run(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Run:
-    r = await db.get(Run, run_id)
-    if r is None:
-        raise HTTPException(status_code=404, detail="run_not_found")
-    return r
+    return await get_owned_run(db, run_id, user)
 
 
 @router.get("/{run_id}/metrics", response_model=list[MetricRead])
@@ -139,6 +162,7 @@ async def get_run_metrics(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[Metric]:
+    await get_owned_run(db, run_id, user)
     rows = (
         await db.execute(select(Metric).where(Metric.run_id == run_id).order_by(Metric.step))
     ).scalars().all()
@@ -151,6 +175,7 @@ async def get_run_artifacts(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ArtifactRead]:
+    await get_owned_run(db, run_id, user)
     rows = (
         await db.execute(select(Artifact).where(Artifact.run_id == run_id))
     ).scalars().all()
@@ -163,6 +188,7 @@ async def get_run_explanations(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, object]]:
+    await get_owned_run(db, run_id, user)
     rows = (
         await db.execute(
             select(ExplanationArtifact).where(ExplanationArtifact.run_id == run_id)
@@ -185,6 +211,7 @@ async def get_run_bias(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, object]]:
+    await get_owned_run(db, run_id, user)
     rows = (
         await db.execute(select(BiasReport).where(BiasReport.run_id == run_id))
     ).scalars().all()
@@ -214,6 +241,8 @@ async def get_run_selected_hyperparams(
     """
     import json
 
+    run = await get_owned_run(db, run_id, user)
+
     row = (
         await db.execute(
             select(Artifact).where(
@@ -229,9 +258,6 @@ async def get_run_selected_hyperparams(
                 return json.loads(abs_path.read_text())
         except Exception:  # noqa: BLE001
             pass
-    run = await db.get(Run, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run not found")
     return {
         "source": "legacy",
         "model_name": None,
@@ -252,9 +278,7 @@ async def get_run_logs(
     TrainingLogStream already consumes. When the trainer is still running
     the file may be missing or partial — the SSE channel fills the gap.
     """
-    r = await db.get(Run, run_id)
-    if r is None:
-        raise HTTPException(status_code=404, detail="run_not_found")
+    await get_owned_run(db, run_id, user)
 
     logs_path = storage.run_logs_path(run_id)
     if not logs_path.exists():
@@ -295,9 +319,7 @@ async def update_run(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Run:
-    r = await db.get(Run, run_id)
-    if r is None:
-        raise HTTPException(status_code=404, detail="run_not_found")
+    r = await get_owned_run(db, run_id, user)
     if payload.display_name is not None:
         r.display_name = payload.display_name.strip() or None
     await db.commit()
@@ -311,9 +333,7 @@ async def cancel_run(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Run:
-    r = await db.get(Run, run_id)
-    if r is None:
-        raise HTTPException(status_code=404, detail="run_not_found")
+    r = await get_owned_run(db, run_id, user)
     r.status = "cancelling"
     await db.commit()
     await db.refresh(r)
@@ -327,6 +347,8 @@ async def delete_run(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     from aipacken.jobs.tasks.train_run import cascade_delete_run_assets
+
+    await get_owned_run(db, run_id, user)
 
     # Block the delete if any model version produced by this run is still
     # referenced by a Deployment. User must remove the deployments first.

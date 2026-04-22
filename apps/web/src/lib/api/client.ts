@@ -61,7 +61,10 @@ async function parseBody(res: Response): Promise<unknown> {
 }
 
 interface ApiFetchInit extends Omit<RequestInit, "body"> {
-  body?: BodyInit | Record<string, unknown> | Array<unknown> | null;
+  // `object` accepts any structural interface (CreateRunInput, CreateDeploymentInput,
+  // plain Records, arrays). Narrower aliases like `Record<string, unknown>` reject
+  // interfaces without an index signature, which every codegen'd input type has.
+  body?: BodyInit | object | null;
   /** If false, skip the default JSON content-type header. */
   json?: boolean;
 }
@@ -162,7 +165,23 @@ export interface FeatureSchema {
 export type TaskKind =
   | "regression"
   | "binary_classification"
-  | "multiclass_classification";
+  | "multiclass_classification"
+  | "forecasting"
+  | "recommender"
+  | "clustering";
+
+export type TaskFamily = "supervised" | "forecasting" | "recommender" | "clustering";
+
+export const SUPERVISED_TASKS: TaskKind[] = [
+  "regression",
+  "binary_classification",
+  "multiclass_classification",
+];
+
+export function taskFamilyOf(task: TaskKind): TaskFamily {
+  if (task === "forecasting" || task === "recommender" || task === "clustering") return task;
+  return "supervised";
+}
 
 export interface ModelCatalogEntry {
   id: string;
@@ -254,9 +273,13 @@ export interface ModelVersionRead {
 export type DeploymentStatus =
   | "pending"
   | "provisioning"
+  | "deploying"
   | "ready"
+  | "active"
+  | "unhealthy"
   | "failed"
   | "stopping"
+  | "tearing_down"
   | "stopped";
 
 export type ModelPackageStatus = "pending" | "building" | "ready" | "failed";
@@ -385,6 +408,18 @@ export const api = {
       apiFetch<DatasetProfile>(`/datasets/${encodeURIComponent(id)}/profile`),
     schema: (id: string) =>
       apiFetch<FeatureSchema[]>(`/datasets/${encodeURIComponent(id)}/schema`),
+    rename: (id: string, name: string) =>
+      apiFetch<DatasetRead>(`/datasets/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: { name },
+      }),
+    remove: (id: string) =>
+      apiFetch<void>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    patchColumnType: (id: string, columnName: string, type: FeatureType) =>
+      apiFetch<FeatureSchema>(
+        `/datasets/${encodeURIComponent(id)}/schema/${encodeURIComponent(columnName)}`,
+        { method: "PATCH", body: { semantic_type: type } },
+      ),
     upload: (file: File, onProgress?: (pct: number) => void): Promise<DatasetRead> =>
       new Promise((resolve, reject) => {
         const form = new FormData();

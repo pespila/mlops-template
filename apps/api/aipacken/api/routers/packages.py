@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
+from aipacken.api.authz import get_owned_model_version, get_owned_package
 from aipacken.db import get_db
 from aipacken.db.models import ModelPackage, ModelVersion, RegisteredModel, User
 from aipacken.jobs.queue import enqueue
@@ -58,8 +59,8 @@ async def create_package(
     rm = await db.get(RegisteredModel, model_id)
     if rm is None:
         raise HTTPException(status_code=404, detail="model_not_found")
-    mv = await db.get(ModelVersion, version_id)
-    if mv is None or mv.registered_model_id != model_id:
+    mv = await get_owned_model_version(db, version_id, user)
+    if mv.registered_model_id != model_id:
         raise HTTPException(status_code=404, detail="version_not_found")
     if not mv.storage_path:
         raise HTTPException(status_code=409, detail="version_has_no_artifact")
@@ -78,10 +79,7 @@ async def get_package(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ModelPackage:
-    pkg = await db.get(ModelPackage, package_id)
-    if pkg is None:
-        raise HTTPException(status_code=404, detail="package_not_found")
-    return pkg
+    return await get_owned_package(db, package_id, user)
 
 
 @router.get("/models/{model_id}/versions/{version_id}/packages")
@@ -91,8 +89,8 @@ async def list_packages_for_version(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ModelPackageRead]:
-    mv = await db.get(ModelVersion, version_id)
-    if mv is None or mv.registered_model_id != model_id:
+    mv = await get_owned_model_version(db, version_id, user)
+    if mv.registered_model_id != model_id:
         raise HTTPException(status_code=404, detail="version_not_found")
     rows = (
         await db.execute(
@@ -110,9 +108,7 @@ async def download_package(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    pkg = await db.get(ModelPackage, package_id)
-    if pkg is None:
-        raise HTTPException(status_code=404, detail="package_not_found")
+    pkg = await get_owned_package(db, package_id, user)
     if pkg.status != "ready" or not pkg.storage_path:
         raise HTTPException(status_code=409, detail=f"package_not_ready: status={pkg.status}")
     abs_path: Path = storage.to_absolute(pkg.storage_path)

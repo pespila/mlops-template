@@ -151,8 +151,12 @@ export function RunDetail() {
           <EditableHeading
             className="flex-1"
             value={run.data?.display_name || `Run ${id.slice(0, 8)}`}
-            onSave={(next) => rename.mutateAsync(next)}
-            onDelete={() => remove.mutateAsync()}
+            onSave={async (next) => {
+              await rename.mutateAsync(next);
+            }}
+            onDelete={async () => {
+              await remove.mutateAsync();
+            }}
             deleteConfirm="Delete this run, its metrics, artifacts, and any model versions it produced?"
             saving={rename.isPending}
             deleting={remove.isPending}

@@ -57,8 +57,12 @@ export function ExperimentDetail() {
         <div className="min-w-0 flex-1">
           <EditableHeading
             value={experiment.data?.name ?? "Experiment"}
-            onSave={(next) => rename.mutateAsync(next)}
-            onDelete={() => remove.mutateAsync()}
+            onSave={async (next) => {
+              await rename.mutateAsync(next);
+            }}
+            onDelete={async () => {
+              await remove.mutateAsync();
+            }}
             deleteConfirm="Delete this experiment and every run inside it? Models produced by those runs will also be removed."
             saving={rename.isPending}
             deleting={remove.isPending}

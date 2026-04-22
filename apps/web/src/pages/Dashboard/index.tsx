@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Database,
   FlaskConical,
+  type LucideIcon,
   Package,
   Rocket,
 } from "lucide-react";
@@ -16,7 +17,7 @@ import { cn } from "@/lib/cn";
 import { formatRelative } from "@/lib/format";
 
 interface StatTileProps {
-  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+  icon: LucideIcon;
   label: string;
   value: number | string;
   to: string;
@@ -57,9 +58,13 @@ function StatTile({ icon: Icon, label, value, to, accent = "primary" }: StatTile
 const DEPLOYMENT_TONE: Record<DeploymentStatus, string> = {
   pending: "bg-bg-muted text-fg2",
   provisioning: "bg-primary/15 text-primary",
+  deploying: "bg-primary/15 text-primary",
   ready: "bg-success/15 text-success",
+  active: "bg-success/15 text-success",
+  unhealthy: "bg-warning/15 text-warning",
   failed: "bg-danger/15 text-danger",
   stopping: "bg-warning/15 text-warning",
+  tearing_down: "bg-warning/15 text-warning",
   stopped: "bg-bg-muted text-fg3",
 };
 
@@ -82,10 +87,6 @@ export function Dashboard() {
   const datasets = useQuery({
     queryKey: ["datasets"],
     queryFn: () => api.datasets.list(),
-  });
-  const experiments = useQuery({
-    queryKey: ["experiments"],
-    queryFn: () => api.experiments.list(),
   });
   const runs = useQuery({
     queryKey: ["runs"],

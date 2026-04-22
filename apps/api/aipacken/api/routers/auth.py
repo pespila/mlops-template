@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,10 +24,10 @@ async def login(
     return user
 
 
-@router.post("/logout")
-async def logout(request: Request) -> dict[str, bool]:
+@router.post("/logout", status_code=204, response_class=Response)
+async def logout(request: Request) -> Response:
     request.session.clear()
-    return {"ok": True}
+    return Response(status_code=204)
 
 
 @router.get("/me", response_model=UserRead)

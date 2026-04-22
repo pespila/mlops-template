@@ -172,8 +172,12 @@ export function ModelDetail() {
       <header className="flex flex-col gap-2">
         <EditableHeading
           value={model.data?.name ?? "Model"}
-          onSave={(next) => rename.mutateAsync(next)}
-          onDelete={() => remove.mutateAsync()}
+          onSave={async (next) => {
+            await rename.mutateAsync(next);
+          }}
+          onDelete={async () => {
+            await remove.mutateAsync();
+          }}
           deleteConfirm="Delete this model and every version under it? This cannot be undone."
           saving={rename.isPending}
           deleting={remove.isPending}

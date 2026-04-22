@@ -7,8 +7,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
+from aipacken.api.authz import get_owned_artifact
 from aipacken.db import get_db
-from aipacken.db.models import Artifact, User
+from aipacken.db.models import User
 from aipacken.services.auth import get_current_user
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
@@ -20,9 +21,7 @@ async def download_artifact(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FileResponse:
-    art = await db.get(Artifact, artifact_id)
-    if art is None:
-        raise HTTPException(status_code=404, detail="artifact_not_found")
+    art = await get_owned_artifact(db, artifact_id, user)
 
     try:
         path = storage.to_absolute(art.uri)

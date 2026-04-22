@@ -47,7 +47,9 @@ export function TestTab({ deploymentId }: TestTabProps) {
           ) : (
             <SchemaDrivenForm
               schema={schema.data}
-              onSubmit={(values) => predict.mutateAsync(values)}
+              onSubmit={async (values) => {
+                await predict.mutateAsync(values);
+              }}
               submitLabel="Send request →"
               busy={predict.isPending}
             />

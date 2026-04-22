@@ -1,6 +1,8 @@
 import path from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+// Import defineConfig from vitest/config so the `test` block below is
+// type-checked (plain vite's UserConfig does not know about the `test` key).
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],

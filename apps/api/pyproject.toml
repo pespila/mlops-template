@@ -65,4 +65,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Pin fixture loop scope to function so each async test gets a fresh loop.
+# Removes the PytestDeprecationWarning and prevents "Event loop is closed"
+# errors when SQLAlchemy engines carry connections across fixture tear-downs.
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

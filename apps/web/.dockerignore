@@ -1,0 +1,37 @@
+# Keep the build context small and reproducible — the host's node_modules is
+# never what we want inside the image, and it occasionally carries broken
+# symlinks (e.g. @playwright/test on macOS) that crash buildkit cache mounts.
+node_modules/
+dist/
+build/
+.vite/
+.turbo/
+
+# Tests, coverage, playwright artifacts
+coverage/
+playwright-report/
+test-results/
+
+# Local env / tooling
+.env
+.env.local
+.env.*.local
+.DS_Store
+*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Git history shouldn't be baked into the image
+.git/
+.gitignore
+
+# Incremental TS build info shouldn't affect the image
+*.tsbuildinfo
+
+# Compiled config artifacts (the .ts sources are authoritative)
+vite.config.js
+vite.config.d.ts
+tailwind.config.js
+tailwind.config.d.ts

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aipacken.api.authz import get_owned_experiment, scope_by_user
 from aipacken.api.schemas.experiments import (
     ExperimentCreate,
     ExperimentList,
@@ -35,10 +36,12 @@ async def create_experiment(
 async def list_experiments(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> ExperimentList:
-    rows = (
-        await db.execute(select(Experiment).order_by(Experiment.created_at.desc()))
-    ).scalars().all()
-    total = (await db.execute(select(func.count()).select_from(Experiment))).scalar_one()
+    stmt = scope_by_user(select(Experiment), Experiment, user).order_by(
+        Experiment.created_at.desc()
+    )
+    count_stmt = scope_by_user(select(func.count()).select_from(Experiment), Experiment, user)
+    rows = (await db.execute(stmt)).scalars().all()
+    total = (await db.execute(count_stmt)).scalar_one()
     return ExperimentList(items=[ExperimentRead.model_validate(r) for r in rows], total=total)
 
 
@@ -48,10 +51,7 @@ async def get_experiment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Experiment:
-    exp = await db.get(Experiment, experiment_id)
-    if exp is None:
-        raise HTTPException(status_code=404, detail="experiment_not_found")
-    return exp
+    return await get_owned_experiment(db, experiment_id, user)
 
 
 @router.patch("/{experiment_id}", response_model=ExperimentRead)
@@ -61,9 +61,7 @@ async def update_experiment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Experiment:
-    exp = await db.get(Experiment, experiment_id)
-    if exp is None:
-        raise HTTPException(status_code=404, detail="experiment_not_found")
+    exp = await get_owned_experiment(db, experiment_id, user)
     if payload.name is not None:
         name = payload.name.strip()
         if not name:
@@ -82,9 +80,7 @@ async def delete_experiment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    exp = await db.get(Experiment, experiment_id)
-    if exp is None:
-        raise HTTPException(status_code=404, detail="experiment_not_found")
+    exp = await get_owned_experiment(db, experiment_id, user)
 
     # Refuse the delete if any model version produced by a run in this
     # experiment still has a Deployment — user must remove those first.
