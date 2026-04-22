@@ -168,14 +168,27 @@ async def get_run_metrics(
     run_id: str,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[Metric]:
+) -> list[MetricRead]:
     await get_owned_run(db, run_id, user)
+
+    # Batch 34 — MLflow read proxy behind MLFLOW_BACKEND=true. MLflow
+    # stores full step-series per metric (what the trainer's
+    # mlflow_sink.log_metric writes via Batch 33); our Metric table
+    # stores one row per JSONL line. When the flag is on, the UI
+    # gets the richer series without schema churn.
+    from aipacken.services import mlflow_client
+
+    if mlflow_client.mlflow_enabled():
+        rows_mlflow = mlflow_client.get_run_metrics(run_id)
+        if rows_mlflow:
+            return [MetricRead.model_validate(r) for r in rows_mlflow]
+
     rows = (
         (await db.execute(select(Metric).where(Metric.run_id == run_id).order_by(Metric.step)))
         .scalars()
         .all()
     )
-    return list(rows)
+    return [MetricRead.model_validate(r) for r in rows]
 
 
 @router.get("/{run_id}/artifacts", response_model=list[ArtifactRead])

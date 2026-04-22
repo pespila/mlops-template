@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     prediction_retention_days: int = 90
     artifact_retention_days: int = 90
 
+    # MLflow migration (Batches 32+). Tracking server URI + feature flag.
+    # When mlflow_backend=true, FastAPI read-paths proxy to MLflow instead
+    # of the DB tables; writers keep going to the DB until Batch 35 cuts
+    # them over. Empty URI disables the MLflow codepath entirely.
+    mlflow_tracking_uri: str = ""
+    mlflow_backend: bool = False
+
     @model_validator(mode="after")
     def _reject_placeholder_secrets_in_prod(self) -> "Settings":
         """Fail fast in prod if any secret still carries its placeholder default.
