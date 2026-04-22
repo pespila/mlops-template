@@ -30,7 +30,12 @@ JsonColumn = JSON().with_variant(JSONB, "postgresql")
 class User(Base, IdMixin, TimestampsMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), default="admin", nullable=False)
+    # Default is 'member', not 'admin'. A freshly-created user should have
+    # the least privilege that still lets them log in; the seeded platform
+    # admin is assigned 'admin' explicitly by seed_admin.py. Previously
+    # defaulting to 'admin' meant any bug that bypassed seed_admin would
+    # mint a privileged account.
+    role: Mapped[str] = mapped_column(String(32), default="member", nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
