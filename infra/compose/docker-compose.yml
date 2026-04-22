@@ -430,10 +430,15 @@ services:
       - "5000"
       - --backend-store-uri
       - "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_MLFLOW_DB}"
+      # Proxied artifact mode: tell clients to upload through the
+      # `mlflow-artifacts:/` scheme instead of directly to S3. MLflow
+      # itself then writes to `--artifacts-destination` using its own
+      # AWS_* env below, so trainer / api / worker never need MinIO
+      # credentials. Matches the 'no client-side S3 creds' design goal.
       - --artifacts-destination
       - "s3://${S3_BUCKET_MLFLOW}"
       - --default-artifact-root
-      - "s3://${S3_BUCKET_MLFLOW}"
+      - "mlflow-artifacts:/"
       - --serve-artifacts
     env_file:
       - ../../.env

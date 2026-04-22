@@ -228,17 +228,17 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             # + any later platform-side joblib.load refuses unsigned or
             # tampered pickles. Must match what serving / build_package use.
             "INTERNAL_HMAC_TOKEN": settings.internal_hmac_token,
-            # MLflow dual-write target (Batch 33). Trainer's mlflow_sink is
-            # no-op when MLFLOW_TRACKING_URI is empty — the worker forwards
-            # whatever the .env carries. boto3 uses AWS_* to authenticate
-            # to the MinIO container on platform-net; MLFLOW_S3_ENDPOINT_URL
-            # points at that same MinIO so artifact uploads never touch the
-            # real AWS.
+            # MLflow — trainer uploads via the proxied-artifact path
+            # (Batch 35c set --default-artifact-root=mlflow-artifacts:/
+            # on the mlflow service). MLflow itself then writes to S3
+            # using its own AWS_* creds; the trainer only needs the
+            # tracking URI. No MinIO credentials leak to clients.
             "MLFLOW_TRACKING_URI": os.environ.get("MLFLOW_TRACKING_URI", ""),
-            "MLFLOW_S3_ENDPOINT_URL": os.environ.get("MLFLOW_S3_ENDPOINT_URL", ""),
-            "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", ""),
-            "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
             "MLFLOW_EXPERIMENT_NAME": (experiment.name if experiment is not None else "default"),
+            # mlflow's Python client tries to stamp a git SHA onto every
+            # run for reproducibility. The trainer image has no git;
+            # silence the noisy warning instead of bloating the image.
+            "GIT_PYTHON_REFRESH": "quiet",
             "TRANSFORM_CONFIG": json.dumps(
                 {
                     "target": tcfg.target_column,
