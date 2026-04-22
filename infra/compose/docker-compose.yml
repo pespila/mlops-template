@@ -18,6 +18,7 @@ x-api-common: &api-common
     - models-net
   volumes:
     - platform-data:/var/platform-data
+  restart: unless-stopped
 
 networks:
   platform-net:
@@ -43,6 +44,9 @@ services:
       - --entrypoints.traefik.address=:8080
       - --api.dashboard=true
       - --api.insecure=true
+      - --accesslog=true
+      - --accesslog.format=json
+      - --ping=true
     ports:
       - "80:80"
       - "127.0.0.1:8080:8080"
@@ -52,6 +56,16 @@ services:
       - platform-net
       - models-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
 
   postgres:
     image: postgres:16-alpine
@@ -70,12 +84,29 @@ services:
       retries: 10
     networks:
       - platform-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
 
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - platform-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
 
   # Traefik runs with the file provider only — api + frontend + per-model
   # routes all live under infra/traefik/dynamic/*.yml. The compose labels
@@ -85,6 +116,19 @@ services:
   api:
     <<: *api-common
     command: ["uvicorn", "aipacken.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      # /api/healthz is the api liveness endpoint (health router mounted
+      # under /api prefix; the route itself is /healthz).
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/healthz',timeout=2).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
 
   worker:
     <<: *api-common
@@ -96,6 +140,20 @@ services:
       # RW mount for the Traefik dynamic-routes dir so the worker can
       # publish per-model routes as deployments come and go.
       - ../traefik/dynamic:/etc/traefik/dynamic
+    # Worker has no HTTP endpoint of its own; use `pgrep` via Python as
+    # a no-extra-dep liveness check. If arq crashes, the restart policy
+    # picks it up.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys; sys.exit(0 if any('arq' in open(f'/proc/{p}/cmdline','rb').read().decode(errors='ignore') for p in os.listdir('/proc') if p.isdigit() and os.path.isdir(f'/proc/{p}')) else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
 
   builder:
     <<: *api-common
@@ -103,6 +161,17 @@ services:
     volumes:
       - platform-data:/var/platform-data
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz',timeout=2).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
 
   frontend:
     build:
@@ -111,3 +180,17 @@ services:
     image: platform/web:latest
     networks:
       - platform-net
+    restart: unless-stopped
+    healthcheck:
+      # nginx:1.27-alpine ships with wget-nc via busybox; this is the
+      # minimal HTTP liveness check that doesn't need extra packages.
+      test:
+        ["CMD-SHELL", "wget --spider -q http://localhost:80/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
