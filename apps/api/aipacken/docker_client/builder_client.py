@@ -9,11 +9,18 @@ from aipacken.config import get_settings
 
 class BuilderClient:
     def __init__(self, base_url: str | None = None, timeout: float = 30.0) -> None:
-        self._base_url = base_url or get_settings().builder_url
+        settings = get_settings()
+        self._base_url = base_url or settings.builder_url
         self._timeout = timeout
+        # Shared bearer: the builder rejects requests without it. Keeping the
+        # header value resolved once at client construction means every
+        # request (including the streaming ones) carries it automatically.
+        self._auth_headers: dict[str, str] = {"X-Internal-Token": settings.internal_hmac_token}
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout)
+        return httpx.AsyncClient(
+            base_url=self._base_url, timeout=self._timeout, headers=self._auth_headers
+        )
 
     async def healthz(self) -> dict[str, Any]:
         async with self._client() as c:
@@ -75,7 +82,9 @@ class BuilderClient:
             return r.json()
 
     async def wait(self, container_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=None) as c:
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=None, headers=self._auth_headers
+        ) as c:
             r = await c.get(f"/wait/{container_id}")
             r.raise_for_status()
             return r.json()
@@ -88,14 +97,18 @@ class BuilderClient:
         written tar in bytes.
         """
         payload = {"image": image, "dest_path": dest_path}
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=None) as c:
+        async with httpx.AsyncClient(
+            base_url=self._base_url, timeout=None, headers=self._auth_headers
+        ) as c:
             r = await c.post("/save_image", json=payload)
             r.raise_for_status()
             return r.json()
 
     async def stream_logs(self, container_id: str) -> httpx.Response:
         # Caller iterates lines via aiter_lines; kept open until iteration completes.
-        client = httpx.AsyncClient(base_url=self._base_url, timeout=None)
+        client = httpx.AsyncClient(
+            base_url=self._base_url, timeout=None, headers=self._auth_headers
+        )
         return await client.send(
             client.build_request("GET", f"/logs/{container_id}/stream"), stream=True
         )

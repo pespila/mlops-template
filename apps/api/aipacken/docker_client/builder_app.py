@@ -8,6 +8,7 @@ blast radius of a compromise in the main app containers.
 from __future__ import annotations
 
 import base64
+import hmac
 import io
 import json
 from typing import Any
@@ -16,15 +17,39 @@ import docker
 import structlog
 from docker.errors import APIError, ImageNotFound, NotFound
 from docker.types import Mount
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from aipacken.config import get_settings
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
 
-app = FastAPI(title="AIpacken Builder", version="0.1.0")
+
+def require_internal_token(
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+) -> None:
+    """Reject any request that does not present the shared INTERNAL_HMAC_TOKEN.
+
+    Every builder endpoint mutates or reads Docker state — leaking them to any
+    container on the same network is a host-root RCE primitive. The api and
+    worker are the only legitimate callers and both already know the token
+    (loaded from the shared .env / compose env). Uses constant-time compare
+    to defeat timing-based guessing.
+    """
+    expected = get_settings().internal_hmac_token
+    if not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
+        raise HTTPException(status_code=401, detail="invalid_or_missing_internal_token")
+
+
+app = FastAPI(
+    title="AIpacken Builder",
+    version="0.1.0",
+    # /healthz is the compose liveness probe and must stay unauthenticated;
+    # everything else is gated by the dependency attached per-route below.
+    dependencies=[],
+)
 
 _docker_client: docker.DockerClient | None = None
 
@@ -56,7 +81,7 @@ class BuildResponse(BaseModel):
     tag: str
 
 
-@app.post("/build", response_model=BuildResponse)
+@app.post("/build", response_model=BuildResponse, dependencies=[Depends(require_internal_token)])
 async def build(req: BuildRequest) -> BuildResponse:
     try:
         tar_bytes = base64.b64decode(req.context_tar_b64)
@@ -110,7 +135,7 @@ class RunResponse(BaseModel):
     container_id: str
 
 
-@app.post("/run", response_model=RunResponse)
+@app.post("/run", response_model=RunResponse, dependencies=[Depends(require_internal_token)])
 async def run_container(req: RunRequest) -> RunResponse:
     client = get_docker()
     mounts = [
@@ -149,7 +174,7 @@ class StopRequest(BaseModel):
     timeout: int = 10
 
 
-@app.post("/stop")
+@app.post("/stop", dependencies=[Depends(require_internal_token)])
 async def stop_container(req: StopRequest) -> dict[str, Any]:
     client = get_docker()
     try:
@@ -163,7 +188,7 @@ async def stop_container(req: StopRequest) -> dict[str, Any]:
     return {"stopped": True, "container_id": req.container_id}
 
 
-@app.get("/wait/{container_id}")
+@app.get("/wait/{container_id}", dependencies=[Depends(require_internal_token)])
 async def wait_container(container_id: str) -> dict[str, Any]:
     """Block until the container exits and return its exit code.
 
@@ -185,7 +210,7 @@ async def wait_container(container_id: str) -> dict[str, Any]:
     }
 
 
-@app.get("/logs/{container_id}")
+@app.get("/logs/{container_id}", dependencies=[Depends(require_internal_token)])
 async def get_logs(container_id: str, tail: int = 500) -> dict[str, Any]:
     """Return the last *tail* lines of a container's stdout/stderr."""
     client = get_docker()
@@ -198,7 +223,7 @@ async def get_logs(container_id: str, tail: int = 500) -> dict[str, Any]:
     return {"container_id": container_id, "lines": text.splitlines()}
 
 
-@app.get("/logs/{container_id}/stream")
+@app.get("/logs/{container_id}/stream", dependencies=[Depends(require_internal_token)])
 async def stream_logs(container_id: str) -> StreamingResponse:
     client = get_docker()
     try:
@@ -232,7 +257,9 @@ class SaveImageResponse(BaseModel):
     size_bytes: int
 
 
-@app.post("/save_image", response_model=SaveImageResponse)
+@app.post(
+    "/save_image", response_model=SaveImageResponse, dependencies=[Depends(require_internal_token)]
+)
 async def save_image(req: SaveImageRequest) -> SaveImageResponse:
     """Stream ``docker save`` for *image* into *dest_path* on the shared volume.
 
@@ -268,7 +295,7 @@ async def save_image(req: SaveImageRequest) -> SaveImageResponse:
     return SaveImageResponse(image=req.image, dest_path=dest, size_bytes=total)
 
 
-@app.get("/events/stream")
+@app.get("/events/stream", dependencies=[Depends(require_internal_token)])
 async def stream_events() -> StreamingResponse:
     client = get_docker()
 
