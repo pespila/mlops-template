@@ -165,9 +165,11 @@ services:
           cpus: "2"
           memory: 2G
 
-  worker:
+  # Fast queue: profile_dataset, deploy_model, teardown_deployment,
+  # cleanup, ping. Seconds-scale housekeeping + deploy orchestration.
+  worker-fast:
     <<: *api-common
-    command: ["arq", "aipacken.jobs.worker.WorkerSettings"]
+    command: ["arq", "aipacken.jobs.worker.FastWorkerSettings"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -182,9 +184,36 @@ services:
       # RW mount for the Traefik dynamic-routes dir so the worker can
       # publish per-model routes as deployments come and go.
       - ../traefik/dynamic:/etc/traefik/dynamic
-    # Worker has no HTTP endpoint of its own; use `pgrep` via Python as
-    # a no-extra-dep liveness check. If arq crashes, the restart policy
-    # picks it up.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys; sys.exit(0 if any('arq' in open(f'/proc/{p}/cmdline','rb').read().decode(errors='ignore') for p in os.listdir('/proc') if p.isdigit() and os.path.isdir(f'/proc/{p}')) else 1)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+
+  # Slow queue: train_run, analyze_run, build_package. Minutes-to-hours
+  # ML workloads. Isolated from the fast queue so a hung trainer cannot
+  # starve housekeeping.
+  worker-slow:
+    <<: *api-common
+    command: ["arq", "aipacken.jobs.worker.SlowWorkerSettings"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      TRAEFIK_DYNAMIC_DIR: /etc/traefik/dynamic
+    volumes:
+      - platform-data:/var/platform-data
+      - ../traefik/dynamic:/etc/traefik/dynamic
     healthcheck:
       test: ["CMD", "python", "-c", "import os,sys; sys.exit(0 if any('arq' in open(f'/proc/{p}/cmdline','rb').read().decode(errors='ignore') for p in os.listdir('/proc') if p.isdigit() and os.path.isdir(f'/proc/{p}')) else 1)"]
       interval: 20s

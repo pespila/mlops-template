@@ -38,7 +38,7 @@ logger = structlog.get_logger(__name__)
 #     in prod;
 #   * the api lifespan below, as a safety net for dev / `make up` where
 #     no init-container runs. Idempotent — head == current is a no-op.
-from aipacken.scripts.run_migrations import run_migrations as _run_migrations
+from aipacken.scripts.run_migrations import run_migrations as _run_migrations  # noqa: E402
 
 
 @asynccontextmanager

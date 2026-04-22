@@ -67,7 +67,7 @@ def run_migrations() -> None:
 def main() -> int:
     try:
         run_migrations()
-    except Exception as exc:  # noqa: BLE001 — top-level CLI, exit 1 with structured log
+    except Exception as exc:  # top-level CLI catches all to exit 1 with a structured log
         logger.error("migrate.failed", error=str(exc))
         return 1
     logger.info("migrate.ok")

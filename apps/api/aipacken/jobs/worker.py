@@ -1,7 +1,32 @@
-"""Arq worker entrypoint.
+"""Arq worker entrypoints — separate 'fast' and 'slow' queues.
+
+One worker pool on a single queue used to back all seven jobs. A long
+training run (hours) would starve the housekeeping queue, and a flaky
+deploy would share retry budget with a cleanup. Split into two queues
+so the two workloads contend for resources independently:
+
+* FastWorkerSettings handles seconds-scale housekeeping:
+  ping, profile_dataset, deploy_model, teardown_deployment, cleanup.
+  Higher concurrency (4 simultaneous), lower per-job timeout, quicker
+  retries.
+
+* SlowWorkerSettings handles minutes-to-hours ML workloads:
+  train_run, analyze_run, build_package.
+  Lower concurrency (2) to respect per-job memory budgets, full
+  training-job-timeout ceiling.
+
+Both invoke the same startup/shutdown to wire ctx['session_factory'] +
+ctx['redis']. The compose file runs two worker services
+(worker-fast + worker-slow) so arq processes are isolated too — a
+hung trainer can no longer pin a slot that a cleanup job needs.
 
 Run with:
-    arq aipacken.jobs.worker.WorkerSettings
+    arq aipacken.jobs.worker.FastWorkerSettings
+    arq aipacken.jobs.worker.SlowWorkerSettings
+
+Legacy `WorkerSettings` is kept for dev / single-worker compose overlays
+and registers every function — falls back to the old one-queue behaviour
+if ``make dev`` only spawns one worker.
 """
 
 from __future__ import annotations
@@ -14,6 +39,7 @@ from arq.worker import func
 
 from aipacken.config import get_settings
 from aipacken.db import SessionLocal
+from aipacken.jobs.queues import FAST_QUEUE, QUEUE_FOR_FUNCTION, SLOW_QUEUE
 from aipacken.jobs.tasks import (
     analyze_run,
     build_package,
@@ -27,6 +53,19 @@ from aipacken.services.redis_client import close_pool, get_redis
 
 logger = structlog.get_logger(__name__)
 
+# Re-export for callers that imported from worker.py historically.
+__all__ = [
+    "FAST_QUEUE",
+    "QUEUE_FOR_FUNCTION",
+    "SLOW_QUEUE",
+    "FastWorkerSettings",
+    "SlowWorkerSettings",
+    "WorkerSettings",
+    "ping",
+    "shutdown",
+    "startup",
+]
+
 
 async def ping(_ctx: dict[str, Any]) -> str:
     return "pong"
@@ -35,7 +74,7 @@ async def ping(_ctx: dict[str, Any]) -> str:
 async def startup(ctx: dict[str, Any]) -> None:
     ctx["session_factory"] = SessionLocal
     ctx["redis"] = get_redis()
-    logger.info("worker.startup")
+    logger.info("worker.startup", queue=ctx.get("queue_name"))
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -43,46 +82,59 @@ async def shutdown(ctx: dict[str, Any]) -> None:
     logger.info("worker.shutdown")
 
 
-# Per-function timeouts + retry budgets. Previously everything shared a single
-# 3-hour timeout + no retry ceiling (perf.md P0: 'Arq worker is a ticking
-# bomb'). Each category now has a cap that matches its real work:
-#   * fast housekeeping: seconds-scale, retry on flake
-#   * long training: matches settings.training_job_timeout_seconds
-#   * deploy / packaging: minutes-scale, a single retry covers transient
-#     Docker / builder hiccups
-#
-# max_tries=1 for cleanup/teardown so a failed delete does not thrash.
-
 _settings = get_settings()
 _TRAIN_TIMEOUT = _settings.training_job_timeout_seconds  # 7200 by default
 
-_FUNCTIONS = [
+# Fast queue — seconds-scale housekeeping + deploy orchestration.
+_FAST_FUNCTIONS = [
     ping,
     func(profile_dataset.profile_dataset, timeout=600, max_tries=3),
-    func(train_run.train_run, timeout=_TRAIN_TIMEOUT, max_tries=2),
-    func(analyze_run.analyze_run, timeout=1800, max_tries=2),
     func(deploy_model.deploy_model, timeout=600, max_tries=3),
     func(teardown_deployment.teardown_deployment, timeout=120, max_tries=1),
     func(cleanup.cleanup, timeout=300, max_tries=1),
+]
+
+# Slow queue — ML workloads that can run for minutes to hours.
+_SLOW_FUNCTIONS = [
+    func(train_run.train_run, timeout=_TRAIN_TIMEOUT, max_tries=2),
+    func(analyze_run.analyze_run, timeout=1800, max_tries=2),
     func(build_package.build_package, timeout=1800, max_tries=2),
 ]
 
 
-class WorkerSettings:
-    functions = _FUNCTIONS
+class FastWorkerSettings:
+    functions = _FAST_FUNCTIONS
     cron_jobs: list[Any] = []
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
-    queue_name = "platform:default"
-    # 4 concurrent trainers is a more honest ceiling than 10 — each trainer
-    # can eat a whole CPU core + several GB of RAM, so 10 in flight on a
-    # single-node box will OOM the host before the queue drains.
-    max_jobs = 4
-    # Retry delay floor for the whole worker. Per-function max_tries override
-    # the try count; this controls how long arq waits between attempts.
+    queue_name = FAST_QUEUE
+    max_jobs = 8
     retry_jobs = True
-    # Global upper bound — any single function's `timeout` still wins; this
-    # is the failsafe so a function without an explicit timeout cannot pin
-    # a slot for longer than the slowest real task.
+    job_timeout = 600
+
+
+class SlowWorkerSettings:
+    functions = _SLOW_FUNCTIONS
+    cron_jobs: list[Any] = []
+    on_startup = startup
+    on_shutdown = shutdown
+    redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
+    queue_name = SLOW_QUEUE
+    # Concurrency 2 — each trainer can own a whole core + several GB of
+    # RAM. Host resource-limit cap on the worker-slow service sizes this
+    # at 4 CPU / 4 G; 2 in flight keeps headroom.
+    max_jobs = 2
+    retry_jobs = True
+    job_timeout = _TRAIN_TIMEOUT
+
+
+# Backward-compat: dev / single-worker setups run this and get all
+# functions on the FAST_QUEUE (enqueue() routes train_run / analyze_run
+# / build_package onto SLOW_QUEUE, so a single-worker WorkerSettings will
+# not pick those up — production must run the split pair).
+class WorkerSettings(FastWorkerSettings):
+    functions = _FAST_FUNCTIONS + _SLOW_FUNCTIONS
+    queue_name = FAST_QUEUE
+    max_jobs = 4
     job_timeout = _TRAIN_TIMEOUT
