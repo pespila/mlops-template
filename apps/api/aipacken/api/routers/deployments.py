@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aipacken import storage
 from aipacken.api.authz import (
     get_owned_deployment,
-    get_owned_model_version,
+    get_owned_run,
     scope_deployment_by_user,
 )
 from aipacken.api.pagination import Pagination, pagination_params
@@ -26,8 +26,9 @@ from aipacken.api.schemas.deployments import (
     PredictResponse,
 )
 from aipacken.db import get_db
-from aipacken.db.models import Deployment, ModelVersion, Run, User
+from aipacken.db.models import Deployment, Run, User
 from aipacken.jobs.queue import enqueue
+from aipacken.services import mlflow_client
 from aipacken.services.auth import get_current_user
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
@@ -50,10 +51,55 @@ async def create_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentRead:
-    # Deploying someone else's model version is an IDOR otherwise.
-    await get_owned_model_version(db, payload.model_version_id, user)
+    """Deploy the MLflow model attached to a platform Run.
+
+    Resolves the MLflow ModelVersion by looking up the Run's
+    ``platform.run_id`` tag in the registry — the trainer registers
+    exactly one version per successful run. The Deployment row
+    snapshots ``(registered_model_name, version_number, mlflow_run_id,
+    model_kind)`` so the serving worker can stage artifacts without a
+    round-trip to MLflow.
+    """
+    run = await get_owned_run(db, payload.run_id, user)
+
+    mlflow_run = mlflow_client.find_run_by_platform_id(run.id)
+    if mlflow_run is None:
+        raise HTTPException(status_code=404, detail="mlflow_run_not_found")
+
+    # Find the MLflow ModelVersion produced by this run. The trainer
+    # tags it with ``platform.run_id``; we search for matching versions
+    # across every registered model (there's only one per run in practice).
+    candidate_name: str | None = None
+    candidate_version: int | None = None
+    tags = dict(mlflow_run.data.tags or {})
+    model_kind = tags.get("platform.model_kind") or "sklearn"
+    registered_name_tag = tags.get("platform.registered_model_name")
+    if registered_name_tag:
+        mvs = mlflow_client.search_model_versions(registered_name_tag)
+        for mv in mvs:
+            if mv.run_id == mlflow_run.info.run_id:
+                candidate_name = registered_name_tag
+                candidate_version = int(mv.version)
+                break
+    if candidate_name is None:
+        # Fall back to a wider scan.
+        for rm in mlflow_client.list_registered_models():
+            for mv in mlflow_client.search_model_versions(rm.name):
+                if mv.run_id == mlflow_run.info.run_id:
+                    candidate_name = rm.name
+                    candidate_version = int(mv.version)
+                    break
+            if candidate_name is not None:
+                break
+    if candidate_name is None or candidate_version is None:
+        raise HTTPException(status_code=409, detail="run_has_no_registered_model_version")
+
     dep = Deployment(
-        model_version_id=payload.model_version_id,
+        run_id=run.id,
+        mlflow_run_id=mlflow_run.info.run_id,
+        registered_model_name=candidate_name,
+        version_number=candidate_version,
+        model_kind=model_kind,
         name=payload.name,
         slug=_slugify(payload.name),
         status="pending",
@@ -172,14 +218,10 @@ async def get_deployment_schema(
         except httpx.HTTPError:
             pass
 
-    mv = await db.get(ModelVersion, dep.model_version_id)
-    if mv is None:
-        raise HTTPException(status_code=404, detail="model_version_not_found")
+    if dep.input_schema_json:
+        return dep.input_schema_json
 
-    if mv.input_schema_json:
-        return mv.input_schema_json
-
-    run = await db.get(Run, mv.run_id)
+    run = await db.get(Run, dep.run_id)
     if run is not None:
         schema_path = storage.run_artifacts_dir(run.id) / "input_schema.json"
         if schema_path.exists():

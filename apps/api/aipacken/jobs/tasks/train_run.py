@@ -1,15 +1,15 @@
-"""Training orchestration — spawns the trainer container, mirrors model pointer.
+"""Training orchestration — spawns the trainer container, registers the model.
 
 The worker spawns a trainer container with the platform-data volume mounted,
 waits for it to exit, then:
 
   * metrics / artifacts / shap / bias       -> authoritative in MLflow
-    (the trainer's mlflow_sink uploaded them during the run; Batch 35a
-    dropped the former DB mirror tables).
-  * artifacts/model.pkl                     -> RegisteredModel + ModelVersion
-    rows still created here so serving containers can mount
-    `/var/platform-data/models/<mv_id>/` as before. Batch 35b moves that
-    last write path into MLflow's model registry.
+    (the trainer's mlflow_sink uploaded them during the run).
+  * artifacts/model.pkl                     -> registered in MLflow's Model
+    Registry (``create_model_version`` + ``@staging`` alias). The platform
+    DB no longer stores RegisteredModel / ModelVersion rows (dropped in
+    migration 0008_mlflow_b); Deployment + ModelPackage reference the
+    MLflow registered-model name + version number directly.
 """
 
 from __future__ import annotations
@@ -30,79 +30,76 @@ from aipacken.db.models import (
     Experiment,
     FeatureSchema,
     ModelCatalogEntry,
-    ModelVersion,
-    RegisteredModel,
     Run,
     TransformConfig,
 )
 from aipacken.docker_client.builder_client import get_builder_client
 from aipacken.jobs.queue import enqueue
+from aipacken.services import mlflow_client
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
 
 
 async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
-    """Remove a Run, its on-disk data, and every ModelVersion it produced.
+    """Remove a Run + its on-disk data + its MLflow run / registered model versions.
 
     Telemetry (metrics / artifacts / explanations / bias reports) lives in
-    MLflow now — this function also deletes the associated MLflow run so
-    its backing rows and artifact blobs go away together. RegisteredModel
-    rows are left alone when they still have surviving versions; removed
-    when this run's versions were the last ones.
+    MLflow; so does the registered-model version produced on training
+    success. Dropping the MLflow run first makes sure a later failure
+    here doesn't leave an orphan mlflow row pointing at a deleted platform
+    run. Registered-model versions produced by this run are deleted too,
+    and the parent RegisteredModel is removed when it has no versions left.
     """
-    from sqlalchemy import select as _select
+    # 1. Find the MLflow run and its registered-model versions.
+    ml_client = mlflow_client.get_client()
+    mlflow_run = mlflow_client.find_run_by_platform_id(run_id)
 
-    from aipacken.services import mlflow_client
+    if ml_client is not None and mlflow_run is not None:
+        # 2. Identify every registered-model version produced by this run
+        #    so we can tear them down first (they FK into the MLflow run).
+        version_refs: list[tuple[str, int]] = []  # (registered_model_name, version)
+        try:
+            for rm in mlflow_client.list_registered_models():
+                for mv in mlflow_client.search_model_versions(rm.name):
+                    if mv.run_id == mlflow_run.info.run_id:
+                        version_refs.append((rm.name, int(mv.version)))
+        except Exception as exc:
+            logger.warning("train_run.mlflow_scan_failed", run_id=run_id, error=str(exc))
+        for name, version in version_refs:
+            try:
+                ml_client.delete_model_version(name=name, version=str(version))
+            except Exception as exc:
+                logger.warning(
+                    "train_run.delete_model_version_failed",
+                    name=name,
+                    version=version,
+                    error=str(exc),
+                )
+        # 3. Drop empty RegisteredModels.
+        for name, _v in version_refs:
+            try:
+                remaining = mlflow_client.search_model_versions(name)
+                if not remaining:
+                    ml_client.delete_registered_model(name=name)
+            except Exception as exc:
+                logger.info(
+                    "train_run.delete_registered_model_skipped",
+                    name=name,
+                    error=str(exc),
+                )
+        # 4. Finally drop the run itself.
+        try:
+            ml_client.delete_run(mlflow_run.info.run_id)
+        except Exception as exc:
+            logger.warning("train_run.mlflow_delete_failed", run_id=run_id, error=str(exc))
 
-    # Drop the MLflow run first so a later failure here doesn't leave an
-    # orphan mlflow row pointing at a deleted platform run.
-    try:
-        client = mlflow_client.get_client()
-        run_obj = mlflow_client.find_run_by_platform_id(run_id)
-        if client is not None and run_obj is not None:
-            client.delete_run(run_obj.info.run_id)
-    except Exception as exc:
-        logger.warning("train_run.mlflow_delete_failed", run_id=run_id, error=str(exc))
-
+    # 5. On-disk cleanup for the platform run's files.
     run = await db.get(Run, run_id)
     if run is None:
         return
-
-    mv_ids = (
-        (await db.execute(_select(ModelVersion.id).where(ModelVersion.run_id == run_id)))
-        .scalars()
-        .all()
-    )
-    reg_ids: set[str] = set()
-    for mv_id in mv_ids:
-        mv = await db.get(ModelVersion, mv_id)
-        if mv is None:
-            continue
-        reg_ids.add(mv.registered_model_id)
-        mv_dir = storage.model_version_dir(mv_id)
-        if mv_dir.exists():
-            shutil.rmtree(mv_dir, ignore_errors=True)
-        await db.delete(mv)
-
     await db.delete(run)
     await db.flush()
-
-    # Drop RegisteredModel rows that no longer have any versions.
-    for reg_id in reg_ids:
-        remaining = (
-            (
-                await db.execute(
-                    _select(ModelVersion.id).where(ModelVersion.registered_model_id == reg_id)
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if remaining is None:
-            reg = await db.get(RegisteredModel, reg_id)
-            if reg is not None:
-                await db.delete(reg)
 
     run_root = storage.run_dir(run_id)
     if run_root.exists():
@@ -374,18 +371,18 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         run.finished_at = datetime.now(UTC)
         await db.commit()
 
-    # --- Metrics / artifacts / SHAP / bias ----------------------------------
-    # All of these are authoritative in MLflow now (migration 0007_mlflow_a
-    # dropped the Metric, Artifact, BiasReport, ExplanationArtifact tables).
-    # The trainer's mlflow_sink uploaded metrics.jsonl + artifacts/* +
-    # reports/* to MLflow on the success path. Readers hit MLflow via
-    # aipacken.services.mlflow_client.
+    # --- Metrics / artifacts / SHAP / bias / MLflow registry ---------------
+    # Metrics, artifacts, SHAP, and bias are authoritative in MLflow
+    # (migration 0007_mlflow_a dropped their mirror tables); the trainer's
+    # mlflow_sink uploaded metrics.jsonl + artifacts/* + reports/* during
+    # the run. Readers go through aipacken.services.mlflow_client.
     #
-    # We still need to discover model_artifact_rel + model_kind for the
-    # RegisteredModel + ModelVersion writes below (Batch 35b will move
-    # those to MLflow's model registry — kept on the DB for now so the
-    # serving containers keep booting against models/<mv_id>/).
-    model_artifact_rel: str | None = None
+    # What's left here is the model-registry write: classify the model
+    # artifact so Deployment/ModelPackage can snapshot the kind, then
+    # call MLflow's ``create_model_version`` so the MLflow registry owns
+    # the "which run produced which version of which model" mapping. An
+    # ``@staging`` alias is set so promotion is a single alias move later.
+    model_artifact_name: str | None = None
     model_kind = "sklearn"
     if artifacts_root.exists():
         for entry_path in sorted(artifacts_root.iterdir()):
@@ -394,73 +391,65 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                 if kind == "file":
                     kind = "model"
                 if kind == "model":
-                    model_artifact_rel = storage.to_relative(entry_path)
+                    model_artifact_name = entry_path.name
                     model_kind = (
                         "autogluon" if "autogluon" in entry_path.name.lower() else "sklearn"
                     )
                 continue
-            if kind == "model" and model_artifact_rel is None:
-                model_artifact_rel = storage.to_relative(entry_path)
+            if kind == "model" and model_artifact_name is None:
+                model_artifact_name = entry_path.name
 
-    # --- RegisteredModel + ModelVersion ------------------------------
-    if model_artifact_rel:
+    if model_artifact_name:
         try:
-            async with session_factory() as db2:
-                model_name = f"{entry.name}-run-{run_id[:8]}"
-                reg = RegisteredModel(name=model_name, description=entry.description)
-                db2.add(reg)
-                await db2.flush()
-
-                # Pick up the input_schema.json the trainer wrote so serving
-                # containers + the deployment UI can load it without a live
-                # probe.
-                input_schema: dict[str, Any] = {}
-                schema_file = storage.run_artifacts_dir(run_id) / "input_schema.json"
-                if schema_file.exists():
-                    try:
-                        input_schema = json.loads(schema_file.read_text())
-                    except Exception as exc:
-                        logger.info("train_run.schema_read_failed", error=str(exc))
-
-                mv = ModelVersion(
-                    registered_model_id=reg.id,
-                    run_id=run_id,
-                    version=1,
-                    stage="staging",
-                    model_kind=model_kind,
-                    input_schema_json=input_schema,
-                    output_schema_json={},
+            mlflow_run = mlflow_client.find_run_by_platform_id(run_id)
+            if mlflow_run is not None:
+                registered_name = f"{entry.name}-run-{run_id[:8]}"
+                # The trainer uploaded everything under ``artifacts/`` inside
+                # the MLflow run, so the registered model's source URI is
+                # ``runs:/<mlflow_run_id>/artifacts/<filename_or_dir>``.
+                source_uri = f"runs:/{mlflow_run.info.run_id}/artifacts/{model_artifact_name}"
+                mv = mlflow_client.register_model_version(
+                    name=registered_name,
+                    source_uri=source_uri,
+                    run_id=mlflow_run.info.run_id,
+                    description=entry.description,
+                    tags={
+                        "platform.run_id": run_id,
+                        "platform.model_kind": model_kind,
+                        "platform.experiment_id": run.experiment_id,
+                        "platform.catalog_name": entry.name,
+                    },
                 )
-                db2.add(mv)
-                await db2.flush()
-
-                # Promote the run artifact into a stable models/{mv_id}/ location
-                # so the source Run can be pruned independently from deployments.
-                mv_dir = storage.model_version_dir(mv.id)
-                mv_dir.mkdir(parents=True, exist_ok=True)
-                src_abs = storage.to_absolute(model_artifact_rel)
-                if src_abs.is_dir():
-                    dst = mv_dir / src_abs.name
-                    if not dst.exists():
-                        shutil.copytree(src_abs, dst)
-                    mv.storage_path = storage.to_relative(dst)
-                else:
-                    dst = mv_dir / src_abs.name
+                if mv is not None:
+                    mlflow_client.set_alias(registered_name, "staging", str(mv.version))
+                    # Tag the tracking-level run with the registered model
+                    # info so the UI / Deployment resolver can look it up
+                    # in a single MLflow call rather than scanning versions.
                     try:
-                        if not dst.exists():
-                            dst.hardlink_to(src_abs)
-                    except OSError:
-                        shutil.copy2(src_abs, dst)
-                    mv.storage_path = storage.to_relative(dst)
+                        client = mlflow_client.get_client()
+                        if client is not None:
+                            client.set_tag(
+                                mlflow_run.info.run_id,
+                                "platform.registered_model_name",
+                                registered_name,
+                            )
+                            client.set_tag(
+                                mlflow_run.info.run_id,
+                                "platform.registered_model_version",
+                                str(mv.version),
+                            )
+                            client.set_tag(
+                                mlflow_run.info.run_id,
+                                "platform.model_kind",
+                                model_kind,
+                            )
+                    except Exception as exc:
+                        logger.info("train_run.run_tag_failed", run_id=run_id, error=str(exc))
 
-                # The serving loader looks for input_schema.json next to the
-                # model artifact — copy it into the model version dir too so
-                # runs can be pruned without breaking already-deployed models.
-                schema_src = storage.run_artifacts_dir(run_id) / "input_schema.json"
-                if schema_src.exists():
-                    shutil.copy2(schema_src, mv_dir / "input_schema.json")
-
-                await db2.commit()
+                    # Copy the input_schema.json into the Deployment-owned
+                    # snapshot location at deploy time, not here — it stays
+                    # in the MLflow artifact store until a Deployment pulls it.
+                    _ = json  # json import retained below for other writes
         except Exception as exc:
             logger.warning("train_run.model_register_failed", error=str(exc))
 

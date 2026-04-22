@@ -337,6 +337,199 @@ def read_run_json(platform_run_id: str, artifact_path: str) -> dict[str, Any] | 
         return None
 
 
+def download_run_artifacts(
+    platform_run_id: str,
+    dst_dir: str,
+    artifact_path: str | None = None,
+) -> str | None:
+    """Pull an artifact (or the whole artifact tree) down to a local dir.
+
+    Used by deploy_model / build_package to stage the trained model on
+    ``/var/platform-data`` before handing it to the serving container.
+    Returns the local path MLflow wrote to, or None on failure.
+    """
+    client = get_client()
+    if client is None:
+        return None
+    run = find_run_by_platform_id(platform_run_id)
+    if run is None:
+        return None
+    try:
+        import mlflow  # type: ignore[import-not-found]
+
+        return mlflow.artifacts.download_artifacts(
+            run_id=run.info.run_id,
+            artifact_path=artifact_path,
+            dst_path=dst_dir,
+        )
+    except Exception as exc:
+        logger.warning(
+            "mlflow.download_artifacts_failed platform_run_id=%s error=%s",
+            platform_run_id,
+            exc,
+        )
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Model registry (Batch 35b)
+# ---------------------------------------------------------------------------
+
+
+def ensure_registered_model(name: str, description: str | None = None) -> None:
+    """Create an MLflow RegisteredModel if it doesn't already exist."""
+    client = get_client()
+    if client is None:
+        return
+    try:
+        client.get_registered_model(name)
+    except Exception:
+        try:
+            client.create_registered_model(name=name, description=description)
+        except Exception as exc:
+            logger.warning("mlflow.create_registered_model_failed name=%s error=%s", name, exc)
+
+
+def register_model_version(
+    name: str,
+    source_uri: str,
+    run_id: str,
+    description: str | None = None,
+    tags: dict[str, str] | None = None,
+) -> Any | None:
+    """Create a new MLflow ModelVersion under ``name`` pointing at ``source_uri``.
+
+    ``run_id`` is the MLflow run id (not the platform UUID). Returns the
+    created ModelVersion (with ``.version`` int) or None on failure.
+    """
+    client = get_client()
+    if client is None:
+        return None
+    ensure_registered_model(name)
+    try:
+        return client.create_model_version(
+            name=name,
+            source=source_uri,
+            run_id=run_id,
+            description=description,
+            tags=tags or {},
+        )
+    except Exception as exc:
+        logger.warning("mlflow.create_model_version_failed name=%s error=%s", name, exc)
+        return None
+
+
+def set_alias(name: str, alias: str, version: int | str) -> bool:
+    """Point ``@alias`` on the registered model ``name`` at ``version``.
+
+    Aliases are unique per registered model — setting ``@production`` on
+    a new version automatically detaches it from whichever version held
+    it before. That's the MLflow-native replacement for the "only one
+    production version at a time" invariant the old ``stage`` column
+    enforced via a partial unique index.
+    """
+    client = get_client()
+    if client is None:
+        return False
+    try:
+        client.set_registered_model_alias(name=name, alias=alias, version=str(version))
+        return True
+    except Exception as exc:
+        logger.warning("mlflow.set_alias_failed name=%s alias=%s error=%s", name, alias, exc)
+        return False
+
+
+def delete_alias(name: str, alias: str) -> bool:
+    client = get_client()
+    if client is None:
+        return False
+    try:
+        client.delete_registered_model_alias(name=name, alias=alias)
+        return True
+    except Exception as exc:
+        logger.warning("mlflow.delete_alias_failed name=%s alias=%s error=%s", name, alias, exc)
+        return False
+
+
+def list_registered_models(max_results: int = 500) -> list[Any]:
+    client = get_client()
+    if client is None:
+        return []
+    try:
+        return list(client.search_registered_models(max_results=max_results))
+    except Exception as exc:
+        logger.warning("mlflow.list_registered_models_failed error=%s", exc)
+        return []
+
+
+def get_registered_model(name: str) -> Any | None:
+    client = get_client()
+    if client is None:
+        return None
+    try:
+        return client.get_registered_model(name)
+    except Exception:
+        return None
+
+
+def search_model_versions(name: str) -> list[Any]:
+    """All MLflow ModelVersions belonging to ``name``, newest first."""
+    client = get_client()
+    if client is None:
+        return []
+    try:
+        rows = client.search_model_versions(f"name='{name}'")
+        return sorted(rows, key=lambda r: int(r.version), reverse=True)
+    except Exception as exc:
+        logger.warning("mlflow.search_model_versions_failed name=%s error=%s", name, exc)
+        return []
+
+
+def get_model_version(name: str, version: int | str) -> Any | None:
+    client = get_client()
+    if client is None:
+        return None
+    try:
+        return client.get_model_version(name=name, version=str(version))
+    except Exception:
+        return None
+
+
+def get_version_by_alias(name: str, alias: str) -> Any | None:
+    client = get_client()
+    if client is None:
+        return None
+    try:
+        return client.get_model_version_by_alias(name=name, alias=alias)
+    except Exception:
+        return None
+
+
+def aliases_for_version(name: str, version: int | str) -> list[str]:
+    """Every alias currently pointing at ``(name, version)``.
+
+    MLflow stores aliases as a dict on the RegisteredModel; this walks
+    it to find any alias assigned to the given version so the UI can
+    render them next to the version row.
+    """
+    rm = get_registered_model(name)
+    if rm is None:
+        return []
+    version_s = str(version)
+    out: list[str] = []
+    aliases = getattr(rm, "aliases", None) or {}
+    # MLflow exposes aliases as a dict-like {alias_name: version_str}
+    if hasattr(aliases, "items"):
+        for alias_name, v in aliases.items():
+            if str(v) == version_s:
+                out.append(str(alias_name))
+    else:
+        for item in aliases:
+            if hasattr(item, "alias") and str(getattr(item, "version", "")) == version_s:
+                out.append(str(item.alias))
+    return out
+
+
 def _classify_artifact(name: str) -> tuple[str, str | None]:
     """Mirror the classification rules from jobs/tasks/train_run.py."""
     lower = name.lower()

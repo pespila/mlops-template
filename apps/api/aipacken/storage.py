@@ -17,6 +17,11 @@ def _root() -> Path:
     return Path(get_settings().data_root)
 
 
+def data_root() -> Path:
+    """Public handle for the ``/var/platform-data`` bind-mount root."""
+    return _root()
+
+
 def ensure_base_dirs() -> None:
     """Create the top-level layout once at startup.
 
@@ -96,13 +101,6 @@ def ensure_run_dirs(run_id: str) -> None:
             _os.chmod(p, 0o777)  # noqa: S103 — see ensure_base_dirs() for rationale
         except OSError:
             pass
-
-
-# ---- model ----
-
-
-def model_version_dir(model_version_id: str) -> Path:
-    return _root() / "models" / model_version_id
 
 
 # ---- package ----

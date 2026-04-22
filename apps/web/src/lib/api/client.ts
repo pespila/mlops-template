@@ -286,7 +286,11 @@ export type ModelPackageStatus = "pending" | "building" | "ready" | "failed";
 
 export interface ModelPackageRead {
   id: string;
-  model_version_id: string;
+  run_id: string;
+  registered_model_name: string | null;
+  version_number: number | null;
+  mlflow_run_id: string | null;
+  model_kind: string;
   status: ModelPackageStatus;
   storage_path: string | null;
   size_bytes: number | null;
@@ -299,7 +303,11 @@ export interface DeploymentRead {
   id: string;
   name: string;
   slug: string;
-  model_version_id: string;
+  run_id: string;
+  mlflow_run_id: string | null;
+  registered_model_name: string | null;
+  version_number: number | null;
+  model_kind: string;
   status: DeploymentStatus;
   /** Public-facing URL the external caller POSTs predictions to. */
   url: string;
@@ -386,7 +394,7 @@ export interface CreateExperimentInput {
 }
 
 export interface CreateDeploymentInput {
-  model_version_id: string;
+  run_id: string;
   name: string;
 }
 
@@ -542,14 +550,14 @@ export const api = {
   },
 
   packages: {
-    createFor: (modelId: string, versionId: string) =>
+    createFor: (runId: string) =>
       apiFetch<ModelPackageRead>(
-        `/models/${encodeURIComponent(modelId)}/versions/${encodeURIComponent(versionId)}/package`,
+        `/runs/${encodeURIComponent(runId)}/package`,
         { method: "POST" },
       ),
-    listFor: (modelId: string, versionId: string) =>
+    listFor: (runId: string) =>
       apiFetch<ModelPackageRead[]>(
-        `/models/${encodeURIComponent(modelId)}/versions/${encodeURIComponent(versionId)}/packages`,
+        `/runs/${encodeURIComponent(runId)}/packages`,
       ),
     get: (packageId: string) =>
       apiFetch<ModelPackageRead>(`/model-packages/${encodeURIComponent(packageId)}`),

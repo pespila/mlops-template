@@ -21,18 +21,16 @@ function formatHpValue(value: unknown): string {
 }
 
 function DownloadPackageButton({
-  modelId,
-  versionId,
+  runId,
 }: {
-  modelId: string;
-  versionId: string;
+  runId: string;
 }) {
-  // Latest package for this version — lets the user re-download without
+  // Latest package for this run — lets the user re-download without
   // rebuilding if there's already a ready tar sitting on disk.
   const list = useQuery({
-    queryKey: ["package-list", versionId],
-    queryFn: () => api.packages.listFor(modelId, versionId),
-    enabled: Boolean(versionId),
+    queryKey: ["package-list", runId],
+    queryFn: () => api.packages.listFor(runId),
+    enabled: Boolean(runId),
   });
   const latest: ModelPackageRead | undefined = list.data?.[0];
   const [pollingId, setPollingId] = useState<string | null>(null);
@@ -65,7 +63,7 @@ function DownloadPackageButton({
   }, [poll.data, pollingId, list]);
 
   const create = useMutation({
-    mutationFn: () => api.packages.createFor(modelId, versionId),
+    mutationFn: () => api.packages.createFor(runId),
     onSuccess: (pkg) => {
       setPollingId(pkg.id);
     },
@@ -141,12 +139,12 @@ export function ModelDetail() {
   const [deployingVersionId, setDeployingVersionId] = useState<string | null>(null);
 
   const deploy = useMutation({
-    mutationFn: async (versionId: string) => {
+    mutationFn: async (runIdForVersion: string) => {
       const modelName = model.data?.name ?? "model";
       // Slug-friendly default name; user can rename on the deployment page.
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
       return api.deployments.create({
-        model_version_id: versionId,
+        run_id: runIdForVersion,
         name: `${modelName}-${stamp}`,
       });
     },
@@ -285,7 +283,7 @@ export function ModelDetail() {
                         type="button"
                         onClick={() => {
                           setDeployingVersionId(v.id);
-                          deploy.mutate(v.id);
+                          deploy.mutate(v.run_id);
                         }}
                         disabled={deploy.isPending && deployingVersionId === v.id}
                         className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--border)] bg-bg px-2.5 py-1 font-semibold text-fg1 transition hover:border-primary hover:bg-[color:var(--primary-soft)] disabled:cursor-not-allowed disabled:opacity-50"
@@ -296,7 +294,7 @@ export function ModelDetail() {
                           ? "Deploying…"
                           : "Deploy"}
                       </button>
-                      <DownloadPackageButton modelId={id} versionId={v.id} />
+                      <DownloadPackageButton runId={v.run_id} />
                     </div>
                   </td>
                 </tr>

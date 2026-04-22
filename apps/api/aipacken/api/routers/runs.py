@@ -28,7 +28,6 @@ from aipacken.api.schemas.runs import (
 from aipacken.db import get_db
 from aipacken.db.models import (
     Deployment,
-    ModelVersion,
     Run,
     TransformConfig,
     User,
@@ -401,9 +400,9 @@ async def delete_run(
     # referenced by a Deployment. User must remove the deployments first.
     blockers = (
         await db.execute(
-            select(Deployment.id, Deployment.name, Deployment.slug, Deployment.status)
-            .join(ModelVersion, Deployment.model_version_id == ModelVersion.id)
-            .where(ModelVersion.run_id == run_id)
+            select(Deployment.id, Deployment.name, Deployment.slug, Deployment.status).where(
+                Deployment.run_id == run_id
+            )
         )
     ).all()
     if blockers:

@@ -64,7 +64,10 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState("");
-  const [modelVersionId, setModelVersionId] = useState("");
+  // After Batch 35b the backend resolves (run_id → MLflow version) instead
+  // of the old ModelVersion DB row, so the picker emits the platform run_id
+  // attached to the chosen MLflow ModelVersion.
+  const [runId, setRunId] = useState("");
 
   const models = useQuery({ queryKey: ["models"], queryFn: () => api.models.list() });
   const model = useQuery({
@@ -74,8 +77,7 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
   });
 
   const create = useMutation({
-    mutationFn: () =>
-      api.deployments.create({ model_version_id: modelVersionId, name: name.trim() }),
+    mutationFn: () => api.deployments.create({ run_id: runId, name: name.trim() }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["deployments"] });
       onClose();
@@ -87,7 +89,7 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
       className="flex flex-col gap-4"
       onSubmit={(ev) => {
         ev.preventDefault();
-        if (modelVersionId && name.trim()) create.mutate();
+        if (runId && name.trim()) create.mutate();
       }}
     >
       <label className="flex flex-col gap-1.5">
@@ -109,7 +111,7 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
           value={modelId}
           onChange={(ev) => {
             setModelId(ev.target.value);
-            setModelVersionId("");
+            setRunId("");
           }}
           className="rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none"
         >
@@ -126,15 +128,16 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
           Version
         </span>
         <select
-          value={modelVersionId}
-          onChange={(ev) => setModelVersionId(ev.target.value)}
+          value={runId}
+          onChange={(ev) => setRunId(ev.target.value)}
           disabled={!modelId || !model.data}
           className="rounded border border-[color:var(--border)] bg-bg px-3 py-2 text-sm focus:border-primary focus:outline-none disabled:opacity-50"
         >
           <option value="">Select a version…</option>
           {(model.data?.versions ?? []).map((v) => (
-            <option key={v.id} value={v.id}>
+            <option key={v.id} value={v.run_id}>
               v{v.version} · {v.model_kind}
+              {v.aliases?.length ? ` · @${v.aliases.join(",@")}` : ""}
             </option>
           ))}
         </select>
@@ -143,7 +146,7 @@ function NewDeploymentForm({ onClose }: { onClose: () => void }) {
         <Button variant="ghost" onClick={onClose} type="button">
           {t("common.cancel")}
         </Button>
-        <Button type="submit" disabled={create.isPending || !modelVersionId || !name.trim()}>
+        <Button type="submit" disabled={create.isPending || !runId || !name.trim()}>
           Deploy →
         </Button>
       </div>

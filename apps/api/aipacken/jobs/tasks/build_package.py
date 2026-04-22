@@ -28,8 +28,9 @@ import structlog
 
 from aipacken import storage
 from aipacken.config import get_settings
-from aipacken.db.models import ModelPackage, ModelVersion, RegisteredModel
+from aipacken.db.models import ModelPackage
 from aipacken.docker_client.builder_client import get_builder_client
+from aipacken.services import mlflow_client
 
 logger = structlog.get_logger(__name__)
 
@@ -393,17 +394,20 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         pkg = await db.get(ModelPackage, package_id)
         if pkg is None:
             return {"status": "missing"}
-        mv = await db.get(ModelVersion, pkg.model_version_id)
-        if mv is None or not mv.storage_path:
+        if not pkg.run_id or not pkg.registered_model_name:
             await _update_status(
                 session_factory,
                 package_id,
                 status="failed",
-                error="model_version_missing_or_incomplete",
+                error="package_missing_run_or_registered_model",
             )
-            return {"status": "failed", "reason": "model_version_missing"}
-        registered = await db.get(RegisteredModel, mv.registered_model_id)
-        model_name = registered.name if registered else "model"
+            return {"status": "failed", "reason": "package_incomplete"}
+
+        run_id = pkg.run_id
+        model_name = pkg.registered_model_name
+        model_kind = pkg.model_kind or "sklearn"
+        version_number = pkg.version_number or 0
+        serving_image_uri = pkg.serving_image_uri
 
         pkg.status = "building"
         pkg.updated_at = datetime.now(UTC)
@@ -420,9 +424,19 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         artifacts_out.mkdir(parents=True, exist_ok=True)
         image_out.mkdir(parents=True, exist_ok=True)
 
-        # 2. Copy the model artifacts.
-        model_dir = storage.to_absolute(mv.storage_path).parent
-        for entry in model_dir.iterdir():
+        # 2. Pull the model's artifact tree down from MLflow. The trainer
+        #    uploaded everything under ``artifacts/`` so that subtree has
+        #    model.pkl, the .sig, input_schema.json, selected_hyperparams.json,
+        #    and any per-flavor side files (e.g. the AutoGluon dir).
+        staged = mlflow_client.download_run_artifacts(
+            platform_run_id=run_id,
+            dst_dir=str(scratch / "_mlflow_download"),
+            artifact_path="artifacts",
+        )
+        if staged is None:
+            raise RuntimeError("mlflow_artifact_download_failed")
+        staged_dir = Path(staged)
+        for entry in staged_dir.iterdir():
             dst = artifacts_out / entry.name
             if entry.is_dir():
                 shutil.copytree(entry, dst, dirs_exist_ok=True)
@@ -430,8 +444,8 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
                 shutil.copy2(entry, dst)
 
         # 3. Ask the builder to save the serving image into image/.
-        is_ag = (mv.model_kind or "").lower() == "autogluon"
-        serving_image = mv.serving_image_uri or (
+        is_ag = model_kind.lower() == "autogluon"
+        serving_image = serving_image_uri or (
             settings.serving_base_autogluon_image if is_ag else settings.serving_base_image
         )
         image_tar_dest = image_out / "serving-image.tar"
@@ -462,13 +476,13 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
             exported_at_utc=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             framework=framework_label,
             task=task_label,
-            model_kind=mv.model_kind or "sklearn",
-            version=mv.version,
-            version_id=mv.id,
-            run_id=mv.run_id,
+            model_kind=model_kind,
+            version=version_number,
+            version_id=f"{model_name}:{version_number}",
+            run_id=run_id,
             slug=_slugify(model_name),
             serving_image=serving_image,
-            pip_deps=_pip_deps_for(mv.model_kind or ""),
+            pip_deps=_pip_deps_for(model_kind),
             input_columns_table=_input_columns_table(artifacts_out),
             example_row=_example_row(artifacts_out),
         )
@@ -476,8 +490,8 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         (scratch / "Dockerfile").write_text(
             _DOCKERFILE_TEMPLATE.format(
                 serving_image=serving_image,
-                version_id=mv.id,
-                model_kind=mv.model_kind or "sklearn",
+                version_id=f"{model_name}-v{version_number}",
+                model_kind=model_kind,
             )
         )
         (scratch / "predict.py").write_text(_PREDICT_PY)
@@ -488,7 +502,7 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         if tar_path.exists():
             tar_path.unlink()
         with tarfile.open(tar_path, "w:gz") as tf:
-            tf.add(scratch, arcname=_slugify(model_name) + f"-v{mv.version}")
+            tf.add(scratch, arcname=_slugify(model_name) + f"-v{version_number}")
         size_bytes = tar_path.stat().st_size
 
         # 6. Scratch dir is disposable — free the space.

@@ -7,9 +7,19 @@ from pydantic import BaseModel, ConfigDict
 
 
 class DeploymentCreate(BaseModel):
+    """Pick a platform Run (or its MLflow ModelVersion) to deploy.
+
+    After Batch 35b the API doesn't mint a separate DB ModelVersion row
+    per train_run — MLflow's registry owns that. Clients send the
+    platform ``run_id`` they want deployed; the server resolves the
+    MLflow registered-model name + version number and snapshots both on
+    the Deployment row so the worker can stage artifacts without another
+    MLflow round-trip.
+    """
+
     model_config = ConfigDict(protected_namespaces=())
 
-    model_version_id: str
+    run_id: str
     name: str
     replicas: int = 1
     audit_payloads: bool = False
@@ -24,7 +34,11 @@ class DeploymentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     id: str
-    model_version_id: str
+    run_id: str
+    mlflow_run_id: str | None = None
+    registered_model_name: str | None = None
+    version_number: int | None = None
+    model_kind: str = "sklearn"
     name: str
     slug: str
     status: str

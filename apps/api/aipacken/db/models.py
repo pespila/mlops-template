@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from aipacken.db.base import Base, IdMixin, TimestampsMixin
 
@@ -135,41 +135,31 @@ class Run(Base, IdMixin, TimestampsMixin):
 # Writes: trainer_base/platform_trainer/mlflow_sink.py.
 
 
-class RegisteredModel(Base, IdMixin, TimestampsMixin):
-    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    versions: Mapped[list[ModelVersion]] = relationship(
-        back_populates="registered_model", cascade="all, delete-orphan"
-    )
-
-
-class ModelVersion(Base, IdMixin, TimestampsMixin):
-    registered_model_id: Mapped[str] = mapped_column(
-        ForeignKey("registered_models.id"), nullable=False, index=True
-    )
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False)
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    stage: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
-    model_kind: Mapped[str] = mapped_column(String(64), default="sklearn", nullable=False)
-    # Relative path inside /var/platform-data (e.g. `models/{mv_id}/model.pkl`
-    # for sklearn-flavored models, or `models/{mv_id}/` directory for AutoGluon).
-    storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    input_schema_json: Mapped[dict[str, Any]] = mapped_column(
-        JsonColumn, nullable=False, default=dict
-    )
-    output_schema_json: Mapped[dict[str, Any]] = mapped_column(
-        JsonColumn, nullable=False, default=dict
-    )
-    serving_image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
-
-    registered_model: Mapped[RegisteredModel] = relationship(back_populates="versions")
+# RegisteredModel + ModelVersion were dropped in migration 0008_mlflow_b.
+# MLflow's built-in Model Registry is the source of truth for registered
+# models, versions, and alias-based promotion (staging/production/…).
+# Reads: aipacken.services.mlflow_client.list_registered_models / get_*.
+# Writes: trainer_base (on training success) + promotion endpoint.
 
 
 class Deployment(Base, IdMixin, TimestampsMixin):
-    model_version_id: Mapped[str] = mapped_column(
-        ForeignKey("model_versions.id"), nullable=False, index=True
-    )
+    # run_id is the authoritative owner-chain anchor — everything else is
+    # snapshotted off the MLflow ModelVersion that was active at deploy-time
+    # so neither the worker nor the serving loader needs to round-trip to
+    # MLflow to figure out where the artifact lives.
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False, index=True)
+    mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    registered_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    version_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_kind: Mapped[str] = mapped_column(String(64), default="sklearn", nullable=False)
+    # Local cache of the MLflow artifact under /var/platform-data so the
+    # serving container keeps its existing MODEL_STORAGE_PATH bind-mount
+    # contract — deploy_model downloads from MLflow into this path on first
+    # run and reuses it on subsequent starts.
+    storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    serving_image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    input_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
+
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     slug: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False, index=True)
@@ -216,10 +206,20 @@ class ModelPackage(Base, IdMixin, TimestampsMixin):
     into a tar.gz living under ``packages/{id}.tar.gz`` on platform-data.
     """
 
-    model_version_id: Mapped[str] = mapped_column(
-        ForeignKey("model_versions.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # Authoritative owner-chain anchor — every package ties back to the Run
+    # that produced it, so authz walks Run → Experiment.user_id exactly like
+    # Deployment. MLflow-side identifiers are snapshotted below for the
+    # build worker's artifact-fetch step.
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), nullable=False, index=True)
+    mlflow_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    registered_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    version_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_kind: Mapped[str] = mapped_column(String(64), default="sklearn", nullable=False)
+    serving_image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    input_schema_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
+
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    # Local path to the built tar.gz under /var/platform-data/packages/.
     storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

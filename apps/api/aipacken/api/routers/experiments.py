@@ -13,7 +13,7 @@ from aipacken.api.schemas.experiments import (
     ExperimentUpdate,
 )
 from aipacken.db import get_db
-from aipacken.db.models import Deployment, Experiment, ModelVersion, Run, User
+from aipacken.db.models import Deployment, Experiment, Run, User
 from aipacken.jobs.tasks.train_run import cascade_delete_run_assets
 from aipacken.services.auth import get_current_user
 
@@ -93,8 +93,7 @@ async def delete_experiment(
     blockers = (
         await db.execute(
             select(Deployment.id, Deployment.name, Deployment.slug, Deployment.status)
-            .join(ModelVersion, Deployment.model_version_id == ModelVersion.id)
-            .join(Run, ModelVersion.run_id == Run.id)
+            .join(Run, Deployment.run_id == Run.id)
             .where(Run.experiment_id == experiment_id)
         )
     ).all()

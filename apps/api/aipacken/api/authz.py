@@ -2,19 +2,18 @@
 
 AIpacken resources trace back to a User. Direct ownership via ``user_id``:
 Dataset, TransformConfig, Experiment. Derived ownership via parent chains:
-Run → Experiment, ModelVersion → Run, Deployment → ModelVersion,
-Prediction → Deployment, ModelPackage → ModelVersion.
+Run → Experiment, Deployment → Run, ModelPackage → Run, Prediction →
+Deployment.
 
 Run telemetry (metrics, artifacts, explanations, bias reports) lives in
-MLflow now; authorization for those goes through ``get_owned_run`` — the
+MLflow; authorization for those goes through ``get_owned_run`` — the
 artifact download endpoint resolves the MLflow run's platform.run_id tag
 and calls that helper.
 
-``RegisteredModel`` and ``ModelCatalogEntry`` are shared-namespace resources
-(no ``user_id`` on their schema today): any authenticated user can list and
-read them, but mutating operations — delete, version-level changes — remain
-owner-scoped. A future tenant-scoped redesign of the model registry would
-slot in here by switching the shared helpers to real filters.
+MLflow ``RegisteredModel`` and its versions are a shared namespace — any
+authenticated user can list / read them, mutations (promotion, delete)
+remain admin-only, and per-version ownership is enforced by walking the
+MLflow ``platform.run_id`` tag back to the DB Run → Experiment.user_id.
 
 Admins (``user.role == "admin"``) bypass all filters. The seeded platform
 admin is authoritative by design.
@@ -35,7 +34,6 @@ from aipacken.db.models import (
     Deployment,
     Experiment,
     ModelPackage,
-    ModelVersion,
     Run,
     TransformConfig,
     User,
@@ -52,18 +50,13 @@ def is_admin(user: User) -> bool:
 
 
 def scope_by_user(stmt: SelectT, model_cls: type, user: User) -> SelectT:
-    """Filter a select by ``model_cls.user_id`` unless the user is admin.
-
-    ``model_cls`` must have a ``user_id`` column: Dataset, TransformConfig,
-    Experiment.
-    """
+    """Filter a select by ``model_cls.user_id`` unless the user is admin."""
     if is_admin(user):
         return stmt
     return stmt.where(model_cls.user_id == user.id)  # type: ignore[attr-defined]
 
 
 def scope_run_by_user(stmt: SelectT, user: User) -> SelectT:
-    """Filter a Run-bound select to runs whose Experiment is owned by user."""
     if is_admin(user):
         return stmt
     return stmt.join(Experiment, Run.experiment_id == Experiment.id).where(
@@ -72,12 +65,21 @@ def scope_run_by_user(stmt: SelectT, user: User) -> SelectT:
 
 
 def scope_deployment_by_user(stmt: SelectT, user: User) -> SelectT:
-    """Filter a Deployment-bound select via ModelVersion → Run → Experiment."""
+    """Filter a Deployment-bound select via Run → Experiment."""
     if is_admin(user):
         return stmt
     return (
-        stmt.join(ModelVersion, Deployment.model_version_id == ModelVersion.id)
-        .join(Run, ModelVersion.run_id == Run.id)
+        stmt.join(Run, Deployment.run_id == Run.id)
+        .join(Experiment, Run.experiment_id == Experiment.id)
+        .where(Experiment.user_id == user.id)
+    )
+
+
+def scope_package_by_user(stmt: SelectT, user: User) -> SelectT:
+    if is_admin(user):
+        return stmt
+    return (
+        stmt.join(Run, ModelPackage.run_id == Run.id)
         .join(Experiment, Run.experiment_id == Experiment.id)
         .where(Experiment.user_id == user.id)
     )
@@ -132,20 +134,6 @@ async def get_owned_run(
     return r
 
 
-async def get_owned_model_version(
-    db: AsyncSession, mv_id: str, user: User, *, detail: str = "version_not_found"
-) -> ModelVersion:
-    mv = await db.get(ModelVersion, mv_id)
-    if mv is None:
-        raise HTTPException(status_code=404, detail=detail)
-    if is_admin(user):
-        return mv
-    run = await db.get(Run, mv.run_id)
-    if run is None or await _run_owner_id(db, run) != user.id:
-        raise HTTPException(status_code=404, detail=detail)
-    return mv
-
-
 async def get_owned_deployment(
     db: AsyncSession, deployment_id: str, user: User, *, detail: str = "deployment_not_found"
 ) -> Deployment:
@@ -154,10 +142,7 @@ async def get_owned_deployment(
         raise HTTPException(status_code=404, detail=detail)
     if is_admin(user):
         return dep
-    mv = await db.get(ModelVersion, dep.model_version_id)
-    if mv is None:
-        raise HTTPException(status_code=404, detail=detail)
-    run = await db.get(Run, mv.run_id)
+    run = await db.get(Run, dep.run_id)
     if run is None or await _run_owner_id(db, run) != user.id:
         raise HTTPException(status_code=404, detail=detail)
     return dep
@@ -171,6 +156,7 @@ async def get_owned_package(
         raise HTTPException(status_code=404, detail=detail)
     if is_admin(user):
         return pkg
-    # Transitive ownership via the model version (raises 404 if not owned).
-    await get_owned_model_version(db, pkg.model_version_id, user, detail=detail)
+    run = await db.get(Run, pkg.run_id)
+    if run is None or await _run_owner_id(db, run) != user.id:
+        raise HTTPException(status_code=404, detail=detail)
     return pkg
