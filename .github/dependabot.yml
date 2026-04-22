@@ -1,0 +1,78 @@
+version: 2
+
+updates:
+  # Python API + worker + builder — all share apps/api/pyproject.toml
+  - package-ecosystem: pip
+    directory: /apps/api
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      python-minor:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  # Trainer base image deps
+  - package-ecosystem: pip
+    directory: /trainer_base
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      trainer-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  # Serving base image deps
+  - package-ecosystem: pip
+    directory: /serving_base
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      serving-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  # Web workspace
+  - package-ecosystem: npm
+    directory: /apps/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      web-minor:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  # GitHub Actions versions in .github/workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  # Base Docker images pinned in Dockerfiles
+  - package-ecosystem: docker
+    directory: /apps/api
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /apps/web
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /trainer_base
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /serving_base
+    schedule:
+      interval: monthly

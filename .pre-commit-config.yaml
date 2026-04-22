@@ -1,0 +1,44 @@
+# Run with: pre-commit install  (one-time) ; pre-commit run --all-files
+#
+# Keeps repo-wide hygiene invariants enforced at commit time instead of
+# surfacing them only in CI. Ruff for python, prettier for web, plus the
+# "don't commit junk" set (secrets, giant files, merge markers).
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # docker-compose and traefik config have tag-like !reset / !override
+        # directives pre-commit-yaml can't parse; skip those.
+        exclude: ^infra/
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: mixed-line-ending
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.2
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^apps/api/|^trainer_base/|^serving_base/
+      - id: ruff-format
+        files: ^apps/api/|^trainer_base/|^serving_base/
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        files: ^apps/web/src/.*\.(ts|tsx|css|json|md)$
+        additional_dependencies: ["prettier@3.3.3"]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: ^(\.secrets\.baseline|apps/web/.pnpm-store/|docs/review/)
