@@ -349,8 +349,9 @@ services:
           cpus: "1"
           memory: 1G
 
-  # One-shot init: create the `mlflow-artifacts` bucket so MLflow doesn't
-  # 404 on its first log_artifact. Runs after MinIO is healthy, exits.
+  # One-shot init: create every S3_BUCKET_* bucket so downstream writers
+  # (MLflow for artifacts, trainer for datasets/reports/predictions) do
+  # not 404 on first use. Runs after MinIO is healthy, exits.
   minio-init:
     image: minio/mc:RELEASE.2024-10-08T09-37-26Z
     entrypoint:
@@ -362,12 +363,20 @@ services:
           echo "[minio-init] waiting for minio…"
           sleep 2
         done
-        mc mb --ignore-existing "local/${MLFLOW_ARTIFACT_BUCKET}"
-        echo "[minio-init] bucket ${MLFLOW_ARTIFACT_BUCKET} ready"
+        for bucket in "$$S3_BUCKET_MLFLOW" "$$S3_BUCKET_DATASETS" "$$S3_BUCKET_ARTIFACTS" "$$S3_BUCKET_REPORTS" "$$S3_BUCKET_PREDICTIONS"; do
+          if [ -n "$$bucket" ]; then
+            mc mb --ignore-existing "local/$$bucket"
+            echo "[minio-init] bucket $$bucket ready"
+          fi
+        done
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MLFLOW_ARTIFACT_BUCKET: ${MLFLOW_ARTIFACT_BUCKET}
+      S3_BUCKET_MLFLOW: ${S3_BUCKET_MLFLOW}
+      S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS}
+      S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS}
+      S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS}
+      S3_BUCKET_PREDICTIONS: ${S3_BUCKET_PREDICTIONS}
     depends_on:
       minio:
         condition: service_healthy
@@ -393,19 +402,23 @@ services:
         pip install --quiet --no-cache-dir boto3==1.35.79 psycopg2-binary==2.9.10 && \
         exec mlflow server \
           --host 0.0.0.0 --port 5000 \
-          --backend-store-uri "postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/mlflow" \
-          --artifacts-destination "s3://$${MLFLOW_ARTIFACT_BUCKET}" \
+          --backend-store-uri "postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_MLFLOW_DB}" \
+          --artifacts-destination "s3://$${S3_BUCKET_MLFLOW}" \
           --serve-artifacts \
-          --default-artifact-root "s3://$${MLFLOW_ARTIFACT_BUCKET}"
+          --default-artifact-root "s3://$${S3_BUCKET_MLFLOW}"
     env_file:
       - ../../.env
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      POSTGRES_MLFLOW_DB: ${POSTGRES_MLFLOW_DB}
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+      # boto3 (which MLflow uses to talk to MinIO) reads these by name.
+      # Point them at the MinIO root creds — the MLflow server acts on
+      # behalf of itself, not the user.
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      MLFLOW_ARTIFACT_BUCKET: ${MLFLOW_ARTIFACT_BUCKET}
+      S3_BUCKET_MLFLOW: ${S3_BUCKET_MLFLOW}
     depends_on:
       postgres:
         condition: service_healthy
