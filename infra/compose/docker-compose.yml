@@ -479,12 +479,13 @@ services:
       - platform-net
     restart: unless-stopped
     healthcheck:
-      # nginx:1.27-alpine ships with wget-nc via busybox; this is the
-      # minimal HTTP liveness check that doesn't need extra packages.
-      test:
-        ["CMD-SHELL", "wget --spider -q http://localhost:80/ || exit 1"]
+      # nginx writes its PID to /var/run/nginx.pid on start. If the
+      # process is alive and the socket is listening, that file exists.
+      # Avoids the wget/curl busybox-subcommand quirks that broke the
+      # previous HTTP-based check in this alpine variant.
+      test: ["CMD-SHELL", "test -s /var/run/nginx.pid || exit 1"]
       interval: 15s
-      timeout: 5s
+      timeout: 3s
       retries: 5
     deploy:
       resources:
