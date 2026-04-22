@@ -44,6 +44,71 @@ async def mlflow_diagnostics() -> dict[str, object]:
     return body
 
 
+@router.get("/mlflow/diag/{platform_run_id}")
+async def mlflow_run_diag(platform_run_id: str) -> dict[str, object]:
+    """Per-run read-path trace — what the api actually sees for one run.
+
+    When the UI shows empty Artifacts / Metrics / Model panels for a run
+    that *did* upload to MLflow, the question is always the same: which
+    step of the chain (experiment lookup → run lookup by tag →
+    list_artifacts → download_artifact) is returning nothing? This
+    endpoint walks the chain and returns each step's output so we can
+    pinpoint the failure in under a minute without shelling in.
+
+    Unauthenticated for the same reason as ``/mlflow/diagnostics`` —
+    self-hosted dev install, no tenant data emitted beyond what the
+    authenticated user already has access to via the normal api.
+    """
+    from aipacken.services import mlflow_client as svc
+
+    body: dict[str, object] = {
+        "platform_run_id": platform_run_id,
+        "enabled": svc.mlflow_enabled(),
+    }
+    client = svc.get_client()
+    if client is None:
+        body["reason"] = "client_unavailable"
+        return body
+    try:
+        exps = client.search_experiments(max_results=50)
+        body["experiments"] = [
+            {"id": e.experiment_id, "name": e.name, "artifact_location": e.artifact_location}
+            for e in exps
+        ]
+    except Exception as exc:
+        body["experiments_error"] = str(exc)
+        return body
+    mlflow_run = svc.find_run_by_platform_id(platform_run_id)
+    if mlflow_run is None:
+        body["mlflow_run"] = None
+        body["reason"] = "no_run_with_matching_platform_tag"
+        return body
+    body["mlflow_run"] = {
+        "run_id": mlflow_run.info.run_id,
+        "experiment_id": mlflow_run.info.experiment_id,
+        "status": mlflow_run.info.status,
+        "artifact_uri": mlflow_run.info.artifact_uri,
+        "tags": dict(mlflow_run.data.tags or {}),
+        "metric_keys": sorted((mlflow_run.data.metrics or {}).keys()),
+        "param_keys": sorted((mlflow_run.data.params or {}).keys()),
+    }
+    try:
+        body["artifacts"] = svc.list_run_artifacts(platform_run_id)
+    except Exception as exc:
+        body["artifacts_error"] = str(exc)
+    try:
+        body["bias_json"] = svc.read_run_json(platform_run_id, "reports/bias.json")
+    except Exception as exc:
+        body["bias_json_error"] = str(exc)
+    try:
+        body["selected_hyperparams_json"] = svc.read_run_json(
+            platform_run_id, "selected_hyperparams.json"
+        )
+    except Exception as exc:
+        body["selected_hyperparams_error"] = str(exc)
+    return body
+
+
 def _verify_token(token: str | None) -> None:
     settings = get_settings()
     if token is None or not hmac.compare_digest(token, settings.internal_hmac_token):

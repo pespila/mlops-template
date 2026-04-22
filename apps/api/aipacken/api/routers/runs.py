@@ -225,9 +225,24 @@ async def get_run_bias(
 ) -> list[dict[str, object]]:
     """Fairness metrics per sensitive feature — from MLflow artifacts.
 
-    The trainer writes one bias report per sensitive feature into
-    ``reports/bias.json``; this reader returns that JSON in the shape
-    the UI already consumes.
+    Trainer writes a single top-level dict into ``reports/bias.json``:
+
+        {
+          "metric": "accuracy",
+          "groups": {"<group>": <value>, …},
+          "deltas": {"<group>": <delta-vs-baseline>, …},
+          "overall": <baseline>,
+          "sensitive_features": ["col-a", "col-b", …],
+          "groups_truncated": false,
+          "groups_total": N,
+        }
+
+    The UI card expects a list of "one group rollup per sensitive
+    feature" rows — we emit exactly one row here (the full
+    fairlearn MetricFrame) with the sensitive features concatenated
+    into the label. An empty ``groups`` dict still returns the row so
+    the UI can render "metric=accuracy overall=1.0 (no per-group
+    splits)" instead of the misleading "no bias analysis".
     """
     from aipacken.services import mlflow_client
 
@@ -235,25 +250,38 @@ async def get_run_bias(
     payload = mlflow_client.read_run_json(run_id, "reports/bias.json")
     if payload is None:
         return []
-    # Support both the legacy single-report shape and any future list.
-    if isinstance(payload, list):
-        groups = payload
+    if not isinstance(payload, dict):
+        return []
+
+    sens_cols = payload.get("sensitive_features") or []
+    if isinstance(sens_cols, str):
+        sens_cols = [sens_cols]
+    label = ",".join(str(c) for c in sens_cols) if sens_cols else "combined"
+
+    overall = payload.get("overall")
+    if isinstance(overall, bool):
+        overall_value: float | None = float(overall)
+    elif isinstance(overall, (int, float)):
+        overall_value = float(overall)
     else:
-        groups = [payload]
-    out: list[dict[str, object]] = []
-    for i, group in enumerate(groups):
-        if not isinstance(group, dict):
-            continue
-        out.append(
-            {
-                "id": f"{run_id}:bias:{i}",
-                "sensitive_feature": group.get("sensitive_feature", ""),
-                "metric_name": group.get("metric") or group.get("metric_name", ""),
-                "overall_value": group.get("overall") or group.get("overall_value"),
-                "group_values": group.get("groups") or group.get("group_values") or {},
-            }
-        )
-    return out
+        overall_value = None
+
+    return [
+        {
+            "id": f"{run_id}:bias:0",
+            "sensitive_feature": label,
+            "metric_name": str(payload.get("metric") or "accuracy"),
+            "overall_value": overall_value,
+            "group_values": {
+                "groups": payload.get("groups") or {},
+                "deltas": payload.get("deltas") or {},
+                "overall": overall,
+                "sensitive_features": sens_cols,
+                "groups_truncated": bool(payload.get("groups_truncated", False)),
+                "groups_total": payload.get("groups_total"),
+            },
+        }
+    ]
 
 
 @router.get("/{run_id}/selected_hyperparams")
