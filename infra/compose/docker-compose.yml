@@ -108,6 +108,28 @@ services:
           cpus: "1"
           memory: 512M
 
+  # One-shot init-container that owns `alembic upgrade head`. api + worker
+  # both depend on its successful completion so the DB schema is always
+  # authoritative before request / job traffic arrives. Uses an advisory
+  # lock so re-running concurrently (e.g. two rolling-deploy pods) is safe.
+  migrate:
+    <<: *api-common
+    command: ["python", "-m", "aipacken.scripts.run_migrations"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No Traefik network needed for a one-shot migration.
+    networks:
+      - platform-net
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
   # Traefik runs with the file provider only — api + frontend + per-model
   # routes all live under infra/traefik/dynamic/*.yml. The compose labels
   # that used to duplicate the static routes have been removed; the worker
@@ -116,6 +138,13 @@ services:
   api:
     <<: *api-common
     command: ["uvicorn", "aipacken.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       # /api/healthz is the api liveness endpoint (health router mounted
       # under /api prefix; the route itself is /healthz).
@@ -133,6 +162,13 @@ services:
   worker:
     <<: *api-common
     command: ["arq", "aipacken.jobs.worker.WorkerSettings"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     environment:
       TRAEFIK_DYNAMIC_DIR: /etc/traefik/dynamic
     volumes:
