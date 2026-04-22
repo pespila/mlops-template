@@ -257,9 +257,12 @@ export interface RunArtifact {
 export interface ModelVersionRead {
   id: string;
   registered_model_id: string;
+  registered_model_name: string;
   version: number;
   run_id: string;
+  mlflow_run_id: string;
   stage: string;
+  aliases: string[];
   model_kind: string;
   storage_path: string | null;
   created_at: string;
