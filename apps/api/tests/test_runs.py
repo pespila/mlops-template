@@ -24,9 +24,7 @@ async def test_create_run_smoke(admin_login: AsyncClient) -> None:
     assert catalog, "catalog should be seeded"
     catalog_id = catalog[0]["id"]
 
-    r = await client.post(
-        "/api/experiments", json={"name": "exp1", "description": None}
-    )
+    r = await client.post("/api/experiments", json={"name": "exp1", "description": None})
     assert r.status_code == 201
     experiment_id = r.json()["id"]
 

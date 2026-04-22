@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -26,20 +26,22 @@ async def analyze_run(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             return {"status": "missing"}
 
         try:
-            from aipacken.ml import analyze as ml_analyze  # imported lazily — avoids heavy deps at worker boot
+            from aipacken.ml import (
+                analyze as ml_analyze,  # imported lazily — avoids heavy deps at worker boot
+            )
 
             await ml_analyze.compute_shap_and_bias(db, run)
         except Exception as exc:
             logger.exception("analyze_run.failed")
             run.status = "failed"
             run.error_message = f"analyze: {exc}"
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             await db.commit()
             await publish(f"run:{run_id}:logs", f"ANALYZE_ERROR: {exc}")
             return {"status": "failed", "error": str(exc)}
 
         run.status = "succeeded"
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         await db.commit()
         await publish(f"run:{run_id}:logs", "ANALYZE_COMPLETE")
         return {"status": "succeeded", "run_id": run_id}

@@ -24,8 +24,6 @@ logger = structlog.get_logger(__name__)
 async def seed_demo() -> str:
     storage.ensure_base_dirs()
 
-    import pandas as pd
-
     iris = load_iris(as_frame=True)
     df = iris.frame.rename(columns={"target": "species"})
     df["species"] = df["species"].astype(int)
@@ -41,8 +39,10 @@ async def seed_demo() -> str:
         if admin is None:
             raise RuntimeError("admin user not seeded — run migrations/startup first")
         existing = (
-            await db.execute(select(Dataset).where(Dataset.storage_path == storage_path))
-        ).scalars().first()
+            (await db.execute(select(Dataset).where(Dataset.storage_path == storage_path)))
+            .scalars()
+            .first()
+        )
         if existing is not None:
             logger.info("seed.demo.exists", dataset_id=existing.id)
             return existing.id

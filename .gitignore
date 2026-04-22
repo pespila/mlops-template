@@ -23,6 +23,10 @@ build/
 *.tsbuildinfo
 # pnpm workspace — npm lockfiles should never be committed
 apps/web/package-lock.json
+# pnpm store + lockfile — lockfile is deliberately absent pending a
+# tracked dep-management pass (docs/review/CODE_REVIEW_REPORT.md SOTA gap).
+apps/web/.pnpm-store/
+apps/web/pnpm-lock.yaml
 # TS-compiled config artifacts (real sources are .ts siblings)
 apps/web/vite.config.js
 apps/web/vite.config.d.ts

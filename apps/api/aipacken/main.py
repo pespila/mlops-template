@@ -7,6 +7,7 @@ import structlog
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 
+from aipacken import storage
 from aipacken.api.routers import (
     artifacts,
     auth,
@@ -26,7 +27,6 @@ from aipacken.config import get_settings
 from aipacken.db import SessionLocal
 from aipacken.scripts.seed_admin import seed_admin
 from aipacken.scripts.seed_catalog import seed_catalog
-from aipacken import storage
 
 logger = structlog.get_logger(__name__)
 
@@ -59,19 +59,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         await asyncio.to_thread(_run_migrations)
         logger.info("api.startup.migrations_ok")
-    except Exception as exc:  # noqa: BLE001 — log + continue so /healthz stays reachable
+    except Exception as exc:
         logger.error("api.startup.migrations_failed", error=str(exc))
 
     try:
         storage.ensure_base_dirs()
-    except Exception as exc:  # noqa: BLE001 — volume may not be mounted in some contexts (tests)
+    except Exception as exc:
         logger.warning("api.startup.storage_unavailable", error=str(exc))
 
     try:
         async with SessionLocal() as db:
             await seed_admin(db)
             await seed_catalog(db)
-    except Exception as exc:  # noqa: BLE001 — migrations may not have run yet
+    except Exception as exc:
         logger.warning("api.startup.seed_failed", error=str(exc))
 
     yield

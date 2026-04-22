@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,7 @@ from aipacken.db.models import (
     BiasReport,
     Dataset,
     ExplanationArtifact,
+    FeatureSchema,
     Metric,
     ModelCatalogEntry,
     ModelVersion,
@@ -59,8 +60,10 @@ async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
         return
 
     mv_ids = (
-        await db.execute(_select(ModelVersion.id).where(ModelVersion.run_id == run_id))
-    ).scalars().all()
+        (await db.execute(_select(ModelVersion.id).where(ModelVersion.run_id == run_id)))
+        .scalars()
+        .all()
+    )
     reg_ids: set[str] = set()
     for mv_id in mv_ids:
         mv = await db.get(ModelVersion, mv_id)
@@ -78,10 +81,14 @@ async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
     # Drop RegisteredModel rows that no longer have any versions.
     for reg_id in reg_ids:
         remaining = (
-            await db.execute(
-                _select(ModelVersion.id).where(ModelVersion.registered_model_id == reg_id)
+            (
+                await db.execute(
+                    _select(ModelVersion.id).where(ModelVersion.registered_model_id == reg_id)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if remaining is None:
             reg = await db.get(RegisteredModel, reg_id)
             if reg is not None:
@@ -101,9 +108,9 @@ async def _mark_run_failed(session_factory: Any, run_id: str, error: str) -> Non
                 return
             r.status = "failed"
             r.error_message = error[:2000]
-            r.finished_at = datetime.now(timezone.utc)
+            r.finished_at = datetime.now(UTC)
             await db.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("train_run.mark_failed_error", error=str(exc))
 
 
@@ -165,19 +172,32 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         storage.ensure_run_dirs(run_id)
 
         run.status = "running"
-        run.started_at = datetime.now(timezone.utc)
+        run.started_at = datetime.now(UTC)
         await db.commit()
 
         dataset_rel = dataset.storage_path
         dataset_filename = Path(dataset_rel).name
 
         # Unpack the reserved keys the router stashed inside hyperparams_json
-        # (``_task`` and ``_hpo``) so MODEL_CATALOG carries them as first-class
-        # fields to the trainer.
+        # (``_task``, ``_hpo``, ``_roles``) so MODEL_CATALOG / TRANSFORM_CONFIG
+        # carry them as first-class fields to the trainer.
         raw_hp = dict(run.hyperparams_json or {})
         run_task: str | None = raw_hp.pop("_task", None)
         run_hpo: dict[str, Any] | None = raw_hp.pop("_hpo", None)
+        run_roles: dict[str, Any] | None = raw_hp.pop("_roles", None)
         resolved_task = run_task or entry.kind
+
+        # User-authored column types (set via PATCH /datasets/{id}/schema/{col}).
+        # Forwarded so the trainer can override pandas dtype inference — e.g.
+        # a date column stored as string reaches the date-feature expander.
+        from sqlalchemy import select as _select
+
+        feature_rows = (
+            (await db.execute(_select(FeatureSchema).where(FeatureSchema.dataset_id == dataset.id)))
+            .scalars()
+            .all()
+        )
+        semantic_types = {r.column_name: r.semantic_type for r in feature_rows if r.semantic_type}
 
         env = {
             "RUN_ID": run.id,
@@ -191,6 +211,8 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                     "transforms": tcfg.transforms_json or [],
                     "split": tcfg.split_json or {"train": 0.7, "val": 0.15, "test": 0.15},
                     "sensitive_features": tcfg.sensitive_features or [],
+                    "roles": run_roles or {},
+                    "semantic_types": semantic_types,
                 }
             ),
             "SENSITIVE_FEATURES": json.dumps(tcfg.sensitive_features or []),
@@ -207,7 +229,9 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             ),
         }
 
-        memory_gb = int(run.resource_limits_json.get("memory_gb", settings.training_default_memory_gb))
+        memory_gb = int(
+            run.resource_limits_json.get("memory_gb", settings.training_default_memory_gb)
+        )
         cpus = int(run.resource_limits_json.get("cpus", settings.training_default_cpu))
 
         builder = get_builder_client()
@@ -235,7 +259,7 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             logger.exception("builder.run_failed")
             run.status = "failed"
             run.error_message = str(exc)
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             await db.commit()
             await publish(f"run:{run.id}:logs", f"BUILDER_ERROR: {exc}")
             return {"status": "failed", "error": str(exc)}
@@ -262,6 +286,25 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         exit_code = int(wait_res.get("exit_code", -1))
     except Exception as exc:
         logger.warning("train_run.wait_failed", error=str(exc))
+
+    # Fallback: even if the streaming tail caught nothing (container died
+    # mid-import, stream RTT lost the first chunk, etc.), pull the full
+    # persisted log buffer via the one-shot /logs endpoint after wait.
+    # Docker retains stdout+stderr until the container is removed.
+    if not captured_lines:
+        try:
+            fallback = await builder.logs(res["container_id"], tail=2000)
+            for text in fallback.get("lines", []) or []:
+                captured_lines.append(text)
+                await publish(f"run:{run_id}:logs", text)
+            if captured_lines:
+                logger.info(
+                    "train_run.log_fallback_recovered",
+                    run_id=run_id,
+                    lines=len(captured_lines),
+                )
+        except Exception as exc:
+            logger.warning("train_run.log_fallback_error", error=str(exc))
 
     run_root = storage.run_dir(run_id)
     artifacts_root = storage.run_artifacts_dir(run_id)
@@ -300,12 +343,12 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         if exit_code != 0:
             run.status = "failed"
             run.error_message = f"trainer exited with code {exit_code}"
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             await db.commit()
             return {"status": "failed", "exit_code": exit_code}
 
         run.status = "succeeded"
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         await db.commit()
 
     # --- Step 1: metrics -----------------------------------------------------
@@ -358,7 +401,9 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                             content_type = "application/x-directory"
                         if kind == "model":
                             model_artifact_rel = storage.to_relative(entry_path)
-                            model_kind = "autogluon" if "autogluon" in entry_path.name.lower() else "sklearn"
+                            model_kind = (
+                                "autogluon" if "autogluon" in entry_path.name.lower() else "sklearn"
+                            )
                         total = sum(p.stat().st_size for p in entry_path.rglob("*") if p.is_file())
                         db2.add(
                             Artifact(
@@ -503,4 +548,9 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             logger.warning("train_run.model_register_failed", error=str(exc))
 
     await enqueue("analyze_run", run_id)
-    return {"status": "succeeded", "run_id": run_id, "exit_code": exit_code, "run_root": str(run_root)}
+    return {
+        "status": "succeeded",
+        "run_id": run_id,
+        "exit_code": exit_code,
+        "run_root": str(run_root),
+    }

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import shutil
 import tarfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -161,8 +161,12 @@ EXPOSE 8000
 _PREDICT_PY = '''"""Standalone inference entrypoint — no Docker required.
 
 Loads the exported model pickle and prints one prediction per row in the
-input JSON payload. Handles both sklearn pipelines (`model.pkl`) and
-AutoGluon predictors (`artifacts/autogluon/` directory).
+input JSON payload. Dispatches on the trainer-written ``input_schema.json``
+``flavor`` field so the same script handles:
+
+* sklearn supervised pipelines            — `.predict(frame)` -> labels/scores
+* AutoGluon TabularPredictor directories   — `.predict(frame)` -> series
+* Clustering (inductive or transductive)   — `.predict(frame)` -> cluster ids
 
 Usage:
 
@@ -178,6 +182,68 @@ import sys
 from pathlib import Path
 
 
+def _load_flavor(artifacts: Path) -> str:
+    schema = artifacts / "input_schema.json"
+    if schema.exists():
+        try:
+            doc = json.loads(schema.read_text())
+            return str(doc.get("flavor") or "sklearn")
+        except Exception:  # noqa: BLE001
+            pass
+    return "sklearn"
+
+
+def _run_forecast(artifacts: Path, payload: dict) -> int:
+    """Forecasting inference — N future values from the fitted sktime model."""
+    import joblib
+    import pandas as pd
+    from sktime.forecasting.base import ForecastingHorizon  # type: ignore[import]
+
+    horizon = int(payload.get("horizon") or 12)
+    if horizon < 1 or horizon > 10000:
+        print('"horizon" must be in [1, 10000]', file=sys.stderr)
+        return 1
+
+    model = joblib.load(artifacts / "model.pkl")
+    fh = ForecastingHorizon(list(range(1, horizon + 1)), is_relative=True)
+    y_pred = model.predict(fh=fh)
+    if isinstance(y_pred, pd.DataFrame):
+        y_pred = y_pred.iloc[:, 0]
+    out = [{"timestamp": str(ts), "value": float(val)} for ts, val in y_pred.items()]
+    print(json.dumps({"forecast": out}))
+    return 0
+
+
+def _run_recommender(artifacts: Path, payload: dict) -> int:
+    """Recommender inference — top-K items or score for a (user, item) pair."""
+    import joblib
+
+    model = joblib.load(artifacts / "model.pkl")
+    user_id = payload.get("user_id")
+    if user_id is None:
+        print('"user_id" is required', file=sys.stderr)
+        return 1
+
+    item_id = payload.get("item_id")
+    if item_id is not None:
+        try:
+            score = float(model.predict_one(user_id, item_id))
+        except Exception as exc:  # noqa: BLE001
+            print(f"score failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps({"user_id": user_id, "item_id": item_id, "score": score}))
+        return 0
+
+    k = int(payload.get("k") or 10)
+    try:
+        items = model.top_k(user_id, k=k)
+    except Exception as exc:  # noqa: BLE001
+        print(f"top_k failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"user_id": user_id, "k": k, "items": list(items)}))
+    return 0
+
+
 def main() -> int:
     artifacts = Path(__file__).resolve().parent / "artifacts"
     try:
@@ -185,6 +251,14 @@ def main() -> int:
     except json.JSONDecodeError as exc:
         print(f"invalid JSON on stdin: {exc}", file=sys.stderr)
         return 1
+
+    flavor = _load_flavor(artifacts)
+
+    # Forecasting has its own payload shape ({"horizon": N}) — no rows frame.
+    if flavor == "forecasting":
+        return _run_forecast(artifacts, payload)
+    if flavor == "recommender":
+        return _run_recommender(artifacts, payload)
 
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
@@ -195,25 +269,8 @@ def main() -> int:
 
     frame = pd.DataFrame(rows)
 
-    # sklearn pipeline path (single model.pkl)
-    pkl = artifacts / "model.pkl"
-    if pkl.exists():
-        import joblib
-
-        model = joblib.load(pkl)
-        preds = model.predict(frame)
-        decoded = preds.tolist() if hasattr(preds, "tolist") else list(preds)
-        out: dict[str, object] = {"predictions": decoded}
-        encoder = getattr(model, "label_encoder_", None)
-        if encoder is not None:
-            try:
-                out["labels"] = list(encoder.inverse_transform(preds))
-            except Exception:  # noqa: BLE001
-                pass
-        print(json.dumps(out))
-        return 0
-
-    # AutoGluon path (directory of arbitrary layout)
+    # AutoGluon directory takes priority when present; its loader needs the
+    # directory path and has its own serialization format.
     ag_dir = artifacts / "autogluon"
     if ag_dir.exists():
         from autogluon.tabular import TabularPredictor  # type: ignore[import]
@@ -223,8 +280,35 @@ def main() -> int:
         print(json.dumps({"predictions": preds.tolist()}))
         return 0
 
-    print("no model artifact found under ./artifacts", file=sys.stderr)
-    return 1
+    pkl = artifacts / "model.pkl"
+    if not pkl.exists():
+        print("no model artifact found under ./artifacts", file=sys.stderr)
+        return 1
+
+    import joblib
+
+    model = joblib.load(pkl)
+    preds = model.predict(frame)
+    decoded = preds.tolist() if hasattr(preds, "tolist") else list(preds)
+
+    if flavor == "clustering":
+        # Clustering returns integer cluster ids (or -1 for DBSCAN noise).
+        # The UI / downstream consumers typically care about cluster_ids +
+        # optionally the counts per cluster for a quick sanity check.
+        out: dict[str, object] = {"cluster_ids": decoded}
+        print(json.dumps(out))
+        return 0
+
+    # Supervised sklearn pipelines (regression / classification).
+    out = {"predictions": decoded}
+    encoder = getattr(model, "label_encoder_", None)
+    if encoder is not None:
+        try:
+            out["labels"] = list(encoder.inverse_transform(preds))
+        except Exception:  # noqa: BLE001
+            pass
+    print(json.dumps(out))
+    return 0
 
 
 if __name__ == "__main__":
@@ -253,7 +337,7 @@ async def _update_status(
             pkg.size_bytes = size_bytes
         if error is not None:
             pkg.error_message = error[:2000]
-        pkg.updated_at = datetime.now(timezone.utc)
+        pkg.updated_at = datetime.now(UTC)
         await db.commit()
 
 
@@ -277,7 +361,7 @@ def _input_columns_table(artifacts_dir: Path) -> str:
             typ = (spec or {}).get("type", "number") if isinstance(spec, dict) else "number"
             rows.append(f"| `{col}` | {typ} |")
         return "\n".join(rows)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "| (unparseable schema) | — |"
 
 
@@ -290,9 +374,9 @@ def _example_row(artifacts_dir: Path) -> str:
         props = schema.get("properties") or {}
         if not isinstance(props, dict):
             return '{"feature_1": 0.0}'
-        example = {col: 0 for col in list(props.keys())[:4]}
+        example = dict.fromkeys(list(props.keys())[:4], 0)
         return json.dumps(example)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return '{"feature_1": 0.0}'
 
 
@@ -322,7 +406,7 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         model_name = registered.name if registered else "model"
 
         pkg.status = "building"
-        pkg.updated_at = datetime.now(timezone.utc)
+        pkg.updated_at = datetime.now(UTC)
         await db.commit()
 
     try:
@@ -347,9 +431,8 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
 
         # 3. Ask the builder to save the serving image into image/.
         is_ag = (mv.model_kind or "").lower() == "autogluon"
-        serving_image = (
-            mv.serving_image_uri
-            or (settings.serving_base_autogluon_image if is_ag else settings.serving_base_image)
+        serving_image = mv.serving_image_uri or (
+            settings.serving_base_autogluon_image if is_ag else settings.serving_base_image
         )
         image_tar_dest = image_out / "serving-image.tar"
         builder = get_builder_client()
@@ -363,7 +446,7 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
             if schema_file.exists():
                 schema_doc = json.loads(schema_file.read_text())
                 task_label = str(schema_doc.get("flavor") or task_label)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         sel_file = artifacts_out / "selected_hyperparams.json"
         try:
@@ -371,12 +454,12 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
                 sel = json.loads(sel_file.read_text())
                 task_label = str(sel.get("task") or task_label)
                 framework_label = str(sel.get("model_name") or framework_label)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         readme = _README_TEMPLATE.format(
             model_name=model_name,
-            exported_at_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            exported_at_utc=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             framework=framework_label,
             task=task_label,
             model_kind=mv.model_kind or "sklearn",

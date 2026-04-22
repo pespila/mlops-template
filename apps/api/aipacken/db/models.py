@@ -135,7 +135,7 @@ class RegisteredModel(Base, IdMixin, TimestampsMixin):
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    versions: Mapped[list["ModelVersion"]] = relationship(
+    versions: Mapped[list[ModelVersion]] = relationship(
         back_populates="registered_model", cascade="all, delete-orphan"
     )
 
@@ -152,9 +152,7 @@ class ModelVersion(Base, IdMixin, TimestampsMixin):
     # for sklearn-flavored models, or `models/{mv_id}/` directory for AutoGluon).
     storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     input_schema_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    output_schema_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
+    output_schema_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     serving_image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     registered_model: Mapped[RegisteredModel] = relationship(back_populates="versions")

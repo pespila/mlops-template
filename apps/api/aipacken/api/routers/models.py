@@ -47,8 +47,8 @@ async def _enrich_version(db: AsyncSession, v: ModelVersion) -> ModelVersionRead
             mv.model_catalog_name = entry.name
 
     metric_rows = (
-        await db.execute(select(Metric).where(Metric.run_id == v.run_id))
-    ).scalars().all()
+        (await db.execute(select(Metric).where(Metric.run_id == v.run_id))).scalars().all()
+    )
     mv.metrics = {m.name: float(m.value) for m in metric_rows}
     return mv
 
@@ -58,8 +58,8 @@ async def list_models(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> RegisteredModelList:
     rows = (
-        await db.execute(select(RegisteredModel).order_by(RegisteredModel.name))
-    ).scalars().all()
+        (await db.execute(select(RegisteredModel).order_by(RegisteredModel.name))).scalars().all()
+    )
     total = (await db.execute(select(func.count()).select_from(RegisteredModel))).scalar_one()
     return RegisteredModelList(
         items=[RegisteredModelRead.model_validate(r) for r in rows], total=total
@@ -163,10 +163,14 @@ async def delete_model(
         )
 
     version_ids = (
-        await db.execute(
-            select(ModelVersion.id).where(ModelVersion.registered_model_id == model_id)
+        (
+            await db.execute(
+                select(ModelVersion.id).where(ModelVersion.registered_model_id == model_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for mv_id in version_ids:
         mv_dir = storage.model_version_dir(mv_id)
         if mv_dir.exists():

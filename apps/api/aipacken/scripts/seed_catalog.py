@@ -11,13 +11,25 @@ from aipacken.db.models import ModelCatalogEntry
 logger = structlog.get_logger(__name__)
 
 
-# Tasks:
+# Tasks (supervised):
 #   "regression"                 -> numeric target
 #   "binary_classification"      -> 2-class target
 #   "multiclass_classification"  -> >2-class target
+#
+# New task families (added alongside supervised): "forecasting", "recommender",
+# "clustering". Each uses its own fit_protocol + serving_mode (see below).
+#
 # `kind` is a coarse DB-level bucket for indexing/informational use; the actual
-# per-task estimator class lives in signature_json.task_class_map and adapter
-# dispatch routes on `name`.
+# per-task estimator class lives in signature_json.task_class_map.
+#
+# signature_json now also carries:
+#   fit_protocol:   "sklearn" | "sktime" | "surprise" | "implicit" | "autogluon"
+#                   — adapter dispatcher reads this to route fit calls.
+#   serving_mode:   "predict" | "assign" | "forecast" | "recommend_topk"
+#                   | "recommend_score"
+#                   — build_package chooses the predict.py template from this.
+#   required_columns: {roles: [...], feedback_type?: "explicit"|"implicit"}
+#                   — per-family role spec used by the wizard's Step 5.
 
 
 def _entry(
@@ -30,6 +42,9 @@ def _entry(
     task_class_map: dict[str, str],
     kind: str | None = None,
     image_uri: str | None = None,
+    fit_protocol: str = "sklearn",
+    serving_mode: str = "predict",
+    required_columns: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if kind is None:
         if supported_tasks == ["regression"]:
@@ -38,16 +53,22 @@ def _entry(
             kind = "classification"
         else:
             kind = "supervised"
+    if required_columns is None:
+        required_columns = {"roles": ["target"]}
+    signature: dict[str, Any] = {
+        "hyperparams": hyperparams,
+        "supported_tasks": supported_tasks,
+        "task_class_map": task_class_map,
+        "fit_protocol": fit_protocol,
+        "serving_mode": serving_mode,
+        "required_columns": required_columns,
+    }
     out: dict[str, Any] = {
         "kind": kind,
         "name": name,
         "framework": framework,
         "description": description,
-        "signature_json": {
-            "hyperparams": hyperparams,
-            "supported_tasks": supported_tasks,
-            "task_class_map": task_class_map,
-        },
+        "signature_json": signature,
     }
     if image_uri is not None:
         out["image_uri"] = image_uri
@@ -229,7 +250,11 @@ CATALOG: list[dict[str, Any]] = [
         hyperparams={
             "n_estimators": {"type": "int", "default": 200, "min": 10, "max": 5000},
             "learning_rate": {
-                "type": "float", "default": 0.1, "min": 0.001, "max": 1.0, "log": True,
+                "type": "float",
+                "default": 0.1,
+                "min": 0.001,
+                "max": 1.0,
+                "log": True,
             },
             "max_depth": {"type": "int", "default": 3, "min": 1, "max": 16},
             "subsample": {"type": "float", "default": 1.0, "min": 0.1, "max": 1.0},
@@ -247,7 +272,11 @@ CATALOG: list[dict[str, Any]] = [
         description="HistGradientBoosting — histogram-based, fast on large data.",
         hyperparams={
             "learning_rate": {
-                "type": "float", "default": 0.1, "min": 0.001, "max": 1.0, "log": True,
+                "type": "float",
+                "default": 0.1,
+                "min": 0.001,
+                "max": 1.0,
+                "log": True,
             },
             "max_iter": {"type": "int", "default": 100, "min": 10, "max": 5000},
             "max_depth": {"type": "int", "default": 8, "min": 1, "max": 64},
@@ -267,7 +296,11 @@ CATALOG: list[dict[str, Any]] = [
         hyperparams={
             "n_estimators": {"type": "int", "default": 50, "min": 10, "max": 2000},
             "learning_rate": {
-                "type": "float", "default": 1.0, "min": 0.001, "max": 10.0, "log": True,
+                "type": "float",
+                "default": 1.0,
+                "min": 0.001,
+                "max": 10.0,
+                "log": True,
             },
         },
         supported_tasks=ALL_TASKS,
@@ -338,7 +371,11 @@ CATALOG: list[dict[str, Any]] = [
             "n_estimators": {"type": "int", "default": 200, "min": 10, "max": 5000},
             "max_depth": {"type": "int", "default": 6, "min": 1, "max": 16},
             "learning_rate": {
-                "type": "float", "default": 0.1, "min": 0.001, "max": 1.0, "log": True,
+                "type": "float",
+                "default": 0.1,
+                "min": 0.001,
+                "max": 1.0,
+                "log": True,
             },
             "subsample": {"type": "float", "default": 1.0, "min": 0.1, "max": 1.0},
             "colsample_bytree": {"type": "float", "default": 1.0, "min": 0.1, "max": 1.0},
@@ -361,7 +398,11 @@ CATALOG: list[dict[str, Any]] = [
             "n_estimators": {"type": "int", "default": 200, "min": 10, "max": 5000},
             "num_leaves": {"type": "int", "default": 31, "min": 2, "max": 4096},
             "learning_rate": {
-                "type": "float", "default": 0.1, "min": 0.001, "max": 1.0, "log": True,
+                "type": "float",
+                "default": 0.1,
+                "min": 0.001,
+                "max": 1.0,
+                "log": True,
             },
             "max_depth": {"type": "int", "default": -1, "min": -1, "max": 64},
             "min_child_samples": {"type": "int", "default": 20, "min": 1, "max": 1000},
@@ -403,6 +444,365 @@ CATALOG: list[dict[str, Any]] = [
             "multiclass_classification": "autogluon.tabular.TabularPredictor",
         },
         kind="classification",
+        fit_protocol="autogluon",
+    ),
+    # --- Clustering (unsupervised) ----------------------------------------
+    # Roles for clustering: feature columns only. Metrics are internal
+    # (silhouette / Calinski-Harabasz / Davies-Bouldin). KMeans / MBKM / GMM
+    # are inductive (`.predict` on new points); DBSCAN + Agglomerative are
+    # transductive and served via 1-NN assignment against the training set.
+    _entry(
+        name="sklearn_kmeans",
+        framework="scikit-learn",
+        description="KMeans — centroid-based clustering, inductive (predicts new points).",
+        hyperparams={
+            "n_clusters": {"type": "int", "default": 8, "min": 2, "max": 100},
+            "init": {"type": "enum", "default": "k-means++", "choices": ["k-means++", "random"]},
+            "n_init": {"type": "int", "default": 10, "min": 1, "max": 50},
+            "max_iter": {"type": "int", "default": 300, "min": 10, "max": 5000},
+        },
+        supported_tasks=["clustering"],
+        task_class_map={"clustering": "sklearn.cluster.KMeans"},
+        kind="clustering",
+        fit_protocol="sklearn_cluster",
+        serving_mode="predict",
+        required_columns={"roles": ["features"]},
+    ),
+    _entry(
+        name="sklearn_minibatch_kmeans",
+        framework="scikit-learn",
+        description="MiniBatchKMeans — KMeans variant that scales to large datasets.",
+        hyperparams={
+            "n_clusters": {"type": "int", "default": 8, "min": 2, "max": 100},
+            "batch_size": {"type": "int", "default": 1024, "min": 64, "max": 100000},
+            "max_iter": {"type": "int", "default": 100, "min": 10, "max": 5000},
+            "n_init": {"type": "int", "default": 3, "min": 1, "max": 50},
+        },
+        supported_tasks=["clustering"],
+        task_class_map={"clustering": "sklearn.cluster.MiniBatchKMeans"},
+        kind="clustering",
+        fit_protocol="sklearn_cluster",
+        serving_mode="predict",
+        required_columns={"roles": ["features"]},
+    ),
+    _entry(
+        name="sklearn_gaussian_mixture",
+        framework="scikit-learn",
+        description="Gaussian Mixture Model — soft clustering, inductive (.predict).",
+        hyperparams={
+            "n_components": {"type": "int", "default": 8, "min": 2, "max": 100},
+            "covariance_type": {
+                "type": "enum",
+                "default": "full",
+                "choices": ["full", "tied", "diag", "spherical"],
+            },
+            "max_iter": {"type": "int", "default": 100, "min": 10, "max": 5000},
+            "n_init": {"type": "int", "default": 1, "min": 1, "max": 20},
+        },
+        supported_tasks=["clustering"],
+        task_class_map={"clustering": "sklearn.mixture.GaussianMixture"},
+        kind="clustering",
+        fit_protocol="sklearn_cluster",
+        serving_mode="predict",
+        required_columns={"roles": ["features"]},
+    ),
+    _entry(
+        name="sklearn_dbscan",
+        framework="scikit-learn",
+        description=(
+            "DBSCAN — density-based clustering. Transductive: new points are "
+            "assigned via 1-NN on the training set at serve time."
+        ),
+        hyperparams={
+            "eps": {"type": "float", "default": 0.5, "min": 0.01, "max": 10.0, "log": True},
+            "min_samples": {"type": "int", "default": 5, "min": 1, "max": 200},
+            "metric": {
+                "type": "enum",
+                "default": "euclidean",
+                "choices": ["euclidean", "manhattan", "cosine"],
+            },
+        },
+        supported_tasks=["clustering"],
+        task_class_map={"clustering": "sklearn.cluster.DBSCAN"},
+        kind="clustering",
+        fit_protocol="sklearn_cluster",
+        serving_mode="assign",
+        required_columns={"roles": ["features"]},
+    ),
+    _entry(
+        name="sklearn_agglomerative",
+        framework="scikit-learn",
+        description=(
+            "Agglomerative / hierarchical clustering (Ward linkage). "
+            "Transductive: serves via 1-NN on training points."
+        ),
+        hyperparams={
+            "n_clusters": {"type": "int", "default": 8, "min": 2, "max": 100},
+            "linkage": {
+                "type": "enum",
+                "default": "ward",
+                "choices": ["ward", "complete", "average", "single"],
+            },
+            "metric": {
+                "type": "enum",
+                "default": "euclidean",
+                "choices": ["euclidean", "manhattan", "cosine", "l1", "l2"],
+            },
+        },
+        supported_tasks=["clustering"],
+        task_class_map={"clustering": "sklearn.cluster.AgglomerativeClustering"},
+        kind="clustering",
+        fit_protocol="sklearn_cluster",
+        serving_mode="assign",
+        required_columns={"roles": ["features"]},
+    ),
+    # --- Forecasting (sktime) ---------------------------------------------
+    # All five forecasters share the sktime BaseForecaster contract so the
+    # trainer adapter can treat them uniformly. Tuple hyperparams (ARIMA
+    # order / SARIMAX seasonal_order) are flattened to independent ints.
+    _entry(
+        name="sktime_naive",
+        framework="sktime",
+        description="Naive baseline — last value / mean / drift. Cheap reference.",
+        hyperparams={
+            "strategy": {
+                "type": "enum",
+                "default": "last",
+                "choices": ["last", "mean", "drift"],
+            },
+            "sp": {"type": "int", "default": 1, "min": 1, "max": 365},
+        },
+        supported_tasks=["forecasting"],
+        task_class_map={"forecasting": "sktime.forecasting.naive.NaiveForecaster"},
+        kind="forecasting",
+        fit_protocol="sktime",
+        serving_mode="forecast",
+        required_columns={"roles": ["time", "target"]},
+    ),
+    _entry(
+        name="sktime_theta",
+        framework="sktime",
+        description="Theta method — simple but strong Box-Jenkins baseline.",
+        hyperparams={
+            "sp": {"type": "int", "default": 1, "min": 1, "max": 365},
+            "deseasonalize": {"type": "bool", "default": True},
+        },
+        supported_tasks=["forecasting"],
+        task_class_map={"forecasting": "sktime.forecasting.theta.ThetaForecaster"},
+        kind="forecasting",
+        fit_protocol="sktime",
+        serving_mode="forecast",
+        required_columns={"roles": ["time", "target"]},
+    ),
+    _entry(
+        name="sktime_ets",
+        framework="sktime",
+        description="Exponential smoothing (Holt-Winters) with trend + seasonality.",
+        hyperparams={
+            "trend": {
+                "type": "enum",
+                "default": "add",
+                "choices": ["add", "mul", "none"],
+            },
+            "seasonal": {
+                "type": "enum",
+                "default": "none",
+                "choices": ["add", "mul", "none"],
+            },
+            "sp": {"type": "int", "default": 1, "min": 1, "max": 365},
+            "damped_trend": {"type": "bool", "default": False},
+        },
+        supported_tasks=["forecasting"],
+        task_class_map={"forecasting": "sktime.forecasting.exp_smoothing.ExponentialSmoothing"},
+        kind="forecasting",
+        fit_protocol="sktime",
+        serving_mode="forecast",
+        required_columns={"roles": ["time", "target"]},
+    ),
+    _entry(
+        name="sktime_arima",
+        framework="sktime",
+        description="ARIMA(p, d, q) — classical Box-Jenkins autoregressive model.",
+        hyperparams={
+            "p": {"type": "int", "default": 1, "min": 0, "max": 5},
+            "d": {"type": "int", "default": 0, "min": 0, "max": 2},
+            "q": {"type": "int", "default": 0, "min": 0, "max": 5},
+        },
+        supported_tasks=["forecasting"],
+        task_class_map={"forecasting": "sktime.forecasting.arima.ARIMA"},
+        kind="forecasting",
+        fit_protocol="sktime",
+        serving_mode="forecast",
+        required_columns={"roles": ["time", "target"]},
+    ),
+    _entry(
+        name="sktime_sarimax",
+        framework="sktime",
+        description=(
+            "SARIMAX — seasonal ARIMA with optional exogenous regressors. "
+            "Hyperparams flatten order=(p,d,q) and seasonal_order=(P,D,Q,s)."
+        ),
+        hyperparams={
+            "p": {"type": "int", "default": 1, "min": 0, "max": 5},
+            "d": {"type": "int", "default": 0, "min": 0, "max": 2},
+            "q": {"type": "int", "default": 0, "min": 0, "max": 5},
+            "P": {"type": "int", "default": 0, "min": 0, "max": 3},
+            "D": {"type": "int", "default": 0, "min": 0, "max": 2},
+            "Q": {"type": "int", "default": 0, "min": 0, "max": 3},
+            "s": {"type": "int", "default": 0, "min": 0, "max": 365},
+        },
+        supported_tasks=["forecasting"],
+        task_class_map={"forecasting": "sktime.forecasting.arima.ARIMA"},
+        kind="forecasting",
+        fit_protocol="sktime",
+        serving_mode="forecast",
+        required_columns={"roles": ["time", "target"]},
+    ),
+    # --- Recommender Engines ----------------------------------------------
+    # Four Surprise models for explicit feedback (RMSE / MAE) + implicit ALS
+    # for implicit feedback (Precision@K / Recall@K / NDCG@K). The adapter
+    # dispatches internally on ``feedback_type``; serving templates on
+    # ``recommend_topk`` (implicit) vs ``recommend_score`` (explicit).
+    _entry(
+        name="surprise_svd",
+        framework="scikit-surprise",
+        description="SVD — matrix factorization for explicit feedback (Simon Funk style).",
+        hyperparams={
+            "n_factors": {"type": "int", "default": 100, "min": 5, "max": 500},
+            "n_epochs": {"type": "int", "default": 20, "min": 1, "max": 200},
+            "lr_all": {
+                "type": "float",
+                "default": 0.005,
+                "min": 0.0001,
+                "max": 0.1,
+                "log": True,
+            },
+            "reg_all": {
+                "type": "float",
+                "default": 0.02,
+                "min": 0.0001,
+                "max": 1.0,
+                "log": True,
+            },
+        },
+        supported_tasks=["recommender"],
+        task_class_map={"recommender": "surprise.SVD"},
+        kind="recommender",
+        fit_protocol="surprise",
+        serving_mode="recommend_score",
+        required_columns={
+            "roles": ["user_id", "item_id", "rating"],
+            "feedback_type": "explicit",
+        },
+    ),
+    _entry(
+        name="surprise_svdpp",
+        framework="scikit-surprise",
+        description="SVD++ — extends SVD with implicit user bias terms.",
+        hyperparams={
+            "n_factors": {"type": "int", "default": 20, "min": 5, "max": 200},
+            "n_epochs": {"type": "int", "default": 20, "min": 1, "max": 200},
+            "lr_all": {
+                "type": "float",
+                "default": 0.007,
+                "min": 0.0001,
+                "max": 0.1,
+                "log": True,
+            },
+            "reg_all": {
+                "type": "float",
+                "default": 0.02,
+                "min": 0.0001,
+                "max": 1.0,
+                "log": True,
+            },
+        },
+        supported_tasks=["recommender"],
+        task_class_map={"recommender": "surprise.SVDpp"},
+        kind="recommender",
+        fit_protocol="surprise",
+        serving_mode="recommend_score",
+        required_columns={
+            "roles": ["user_id", "item_id", "rating"],
+            "feedback_type": "explicit",
+        },
+    ),
+    _entry(
+        name="surprise_knn",
+        framework="scikit-surprise",
+        description="KNNBasic — user- or item-based collaborative filtering.",
+        hyperparams={
+            "k": {"type": "int", "default": 40, "min": 1, "max": 200},
+            "min_k": {"type": "int", "default": 1, "min": 1, "max": 100},
+            "sim_name": {
+                "type": "enum",
+                "default": "cosine",
+                "choices": ["cosine", "pearson", "msd", "pearson_baseline"],
+            },
+            "sim_user_based": {"type": "bool", "default": True},
+        },
+        supported_tasks=["recommender"],
+        task_class_map={"recommender": "surprise.KNNBasic"},
+        kind="recommender",
+        fit_protocol="surprise",
+        serving_mode="recommend_score",
+        required_columns={
+            "roles": ["user_id", "item_id", "rating"],
+            "feedback_type": "explicit",
+        },
+    ),
+    _entry(
+        name="surprise_nmf",
+        framework="scikit-surprise",
+        description="NMF — non-negative matrix factorization for explicit ratings.",
+        hyperparams={
+            "n_factors": {"type": "int", "default": 15, "min": 5, "max": 200},
+            "n_epochs": {"type": "int", "default": 50, "min": 1, "max": 500},
+        },
+        supported_tasks=["recommender"],
+        task_class_map={"recommender": "surprise.NMF"},
+        kind="recommender",
+        fit_protocol="surprise",
+        serving_mode="recommend_score",
+        required_columns={
+            "roles": ["user_id", "item_id", "rating"],
+            "feedback_type": "explicit",
+        },
+    ),
+    _entry(
+        name="implicit_als",
+        framework="implicit",
+        description=(
+            "Alternating Least Squares for implicit feedback — "
+            "confidence-weighted matrix factorization."
+        ),
+        hyperparams={
+            "factors": {"type": "int", "default": 64, "min": 8, "max": 512},
+            "regularization": {
+                "type": "float",
+                "default": 0.01,
+                "min": 0.0001,
+                "max": 1.0,
+                "log": True,
+            },
+            "iterations": {"type": "int", "default": 15, "min": 1, "max": 200},
+            "alpha": {
+                "type": "float",
+                "default": 40.0,
+                "min": 1.0,
+                "max": 1000.0,
+                "log": True,
+            },
+        },
+        supported_tasks=["recommender"],
+        task_class_map={"recommender": "implicit.als.AlternatingLeastSquares"},
+        kind="recommender",
+        fit_protocol="implicit",
+        serving_mode="recommend_topk",
+        required_columns={
+            "roles": ["user_id", "item_id", "rating"],
+            "feedback_type": "implicit",
+        },
     ),
 ]
 

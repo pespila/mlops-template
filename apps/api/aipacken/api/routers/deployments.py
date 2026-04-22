@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import UTC
 from typing import Any
 
 import httpx
@@ -20,7 +21,6 @@ from aipacken.api.schemas.deployments import (
     DeploymentList,
     DeploymentRead,
     DeploymentUpdate,
-    PredictRequest,
     PredictResponse,
 )
 from aipacken.db import get_db
@@ -69,9 +69,7 @@ async def create_deployment(
 async def list_deployments(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> DeploymentList:
-    stmt = scope_deployment_by_user(select(Deployment), user).order_by(
-        Deployment.created_at.desc()
-    )
+    stmt = scope_deployment_by_user(select(Deployment), user).order_by(Deployment.created_at.desc())
     count_stmt = scope_deployment_by_user(select(func.count(Deployment.id)), user)
     rows = (await db.execute(stmt)).scalars().all()
     total = (await db.execute(count_stmt)).scalar_one()
@@ -185,7 +183,7 @@ async def get_deployment_logs(
 ) -> list[dict[str, str]]:
     """Tail of the serving container's stdout/stderr, shaped for the UI."""
     import json as _json
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
 
     dep = await get_owned_deployment(db, deployment_id, user)
     if not dep.container_id:
@@ -209,7 +207,11 @@ async def get_deployment_logs(
                 if isinstance(parsed, dict):
                     out.append(
                         {
-                            "ts": str(parsed.get("ts") or parsed.get("timestamp") or _dt.now(_tz.utc).isoformat()),
+                            "ts": str(
+                                parsed.get("ts")
+                                or parsed.get("timestamp")
+                                or _dt.now(UTC).isoformat()
+                            ),
                             "level": str(parsed.get("level") or "info").lower(),
                             "message": str(parsed.get("message") or parsed.get("event") or raw),
                         }
@@ -219,7 +221,7 @@ async def get_deployment_logs(
                 pass
         upper = raw.upper()
         level = "error" if "ERROR" in upper else ("warn" if "WARN" in upper else "info")
-        out.append({"ts": _dt.now(_tz.utc).isoformat(), "level": level, "message": raw})
+        out.append({"ts": _dt.now(UTC).isoformat(), "level": level, "message": raw})
     return out
 
 

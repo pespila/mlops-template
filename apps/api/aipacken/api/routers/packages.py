@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aipacken import storage
 from aipacken.api.authz import get_owned_model_version, get_owned_package
 from aipacken.db import get_db
-from aipacken.db.models import ModelPackage, ModelVersion, RegisteredModel, User
+from aipacken.db.models import ModelPackage, RegisteredModel, User
 from aipacken.jobs.queue import enqueue
 from aipacken.services.auth import get_current_user
 
@@ -93,12 +93,16 @@ async def list_packages_for_version(
     if mv.registered_model_id != model_id:
         raise HTTPException(status_code=404, detail="version_not_found")
     rows = (
-        await db.execute(
-            select(ModelPackage)
-            .where(ModelPackage.model_version_id == version_id)
-            .order_by(ModelPackage.created_at.desc())
+        (
+            await db.execute(
+                select(ModelPackage)
+                .where(ModelPackage.model_version_id == version_id)
+                .order_by(ModelPackage.created_at.desc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [ModelPackageRead.model_validate(r) for r in rows]
 
 

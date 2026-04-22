@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -103,7 +103,7 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
         dep.internal_url = internal_url
         dep.endpoint_url = f"/models/{dep.slug}"
         dep.status = "active" if ready else "unhealthy"
-        dep.last_health_at = datetime.now(timezone.utc)
+        dep.last_health_at = datetime.now(UTC)
         await db.commit()
         await publish(f"deployment:{deployment_id}:events", {"status": dep.status})
         return {"status": dep.status, "container_id": container_id}

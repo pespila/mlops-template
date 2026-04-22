@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -26,7 +27,7 @@ def _shape_log(raw: Any) -> dict[str, Any]:
                 parsed = json.loads(stripped)
                 if isinstance(parsed, dict):
                     return {
-                        "ts": str(parsed.get("ts") or datetime.now(timezone.utc).isoformat()),
+                        "ts": str(parsed.get("ts") or datetime.now(UTC).isoformat()),
                         "level": str(parsed.get("level") or "info"),
                         "message": str(parsed.get("message") or parsed.get("msg") or stripped),
                     }
@@ -34,18 +35,18 @@ def _shape_log(raw: Any) -> dict[str, Any]:
                 pass
         level = "error" if "ERROR" in raw.upper() else ("warn" if "WARN" in raw.upper() else "info")
         return {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "level": level,
             "message": raw,
         }
     if isinstance(raw, dict):
         return {
-            "ts": str(raw.get("ts") or datetime.now(timezone.utc).isoformat()),
+            "ts": str(raw.get("ts") or datetime.now(UTC).isoformat()),
             "level": str(raw.get("level") or "info"),
             "message": str(raw.get("message") or raw.get("msg") or json.dumps(raw)),
         }
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "level": "info",
         "message": str(raw),
     }
@@ -89,7 +90,9 @@ async def stream_run_logs(run_id: str, user: User = Depends(get_current_user)) -
 
 
 @router.get("/runs/{run_id}/metrics")
-async def stream_run_metrics(run_id: str, user: User = Depends(get_current_user)) -> StreamingResponse:
+async def stream_run_metrics(
+    run_id: str, user: User = Depends(get_current_user)
+) -> StreamingResponse:
     return _stream(f"run:{run_id}:metrics", event_name="metric")
 
 

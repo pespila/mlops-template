@@ -20,16 +20,16 @@ os.environ["PLATFORM_ADMIN_PASSWORD"] = "change-me"
 _TEST_DATA_ROOT = tempfile.mkdtemp(prefix="aipacken-test-")
 os.environ.setdefault("DATA_ROOT", _TEST_DATA_ROOT)
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
-from aipacken import db as db_module  # noqa: E402
-from aipacken.db import get_db  # noqa: E402
-from aipacken.db.base import Base  # noqa: E402
-from aipacken.db import models as _models  # noqa: E402,F401  — register tables
+from aipacken import db as db_module
+from aipacken.db import get_db
+from aipacken.db import models as _models  # noqa: F401  — register tables
+from aipacken.db.base import Base
 
 
 @pytest_asyncio.fixture
@@ -40,8 +40,8 @@ async def engine() -> AsyncIterator[Any]:
         poolclass=StaticPool,
     )
     # JSONB → JSON fallback for sqlite: replace the dialect-specific JSONB columns.
-    from sqlalchemy.dialects.postgresql import JSONB
     from sqlalchemy import JSON
+    from sqlalchemy.dialects.postgresql import JSONB
 
     for table in Base.metadata.tables.values():
         for col in table.columns:
@@ -60,7 +60,9 @@ async def session_factory(engine: Any) -> Any:
 
 
 @pytest_asyncio.fixture
-async def client(session_factory: Any, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
+async def client(
+    session_factory: Any, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AsyncClient]:
     async def _override_get_db() -> AsyncIterator[Any]:
         async with session_factory() as session:
             yield session
@@ -76,11 +78,11 @@ async def client(session_factory: Any, monkeypatch: pytest.MonkeyPatch) -> Async
     # binds it locally, so we need to patch both the source module AND every
     # router's local binding (otherwise the real enqueue fires → opens a
     # Redis connection → "Event loop is closed" noise at teardown).
-    from aipacken.jobs import queue as queue_module
     from aipacken.api.routers import datasets as _rd_datasets
     from aipacken.api.routers import deployments as _rd_deployments
     from aipacken.api.routers import packages as _rd_packages
     from aipacken.api.routers import runs as _rd_runs
+    from aipacken.jobs import queue as queue_module
 
     _enqueue_stub = AsyncMock(return_value="job-stub")
     monkeypatch.setattr(queue_module, "enqueue", _enqueue_stub)

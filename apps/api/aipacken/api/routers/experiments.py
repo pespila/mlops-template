@@ -110,8 +110,8 @@ async def delete_experiment(
 
     # Cascade-delete every run (and its on-disk artifacts + model versions).
     run_ids = (
-        await db.execute(select(Run.id).where(Run.experiment_id == experiment_id))
-    ).scalars().all()
+        (await db.execute(select(Run.id).where(Run.experiment_id == experiment_id))).scalars().all()
+    )
     for run_id in run_ids:
         await cascade_delete_run_assets(db, run_id)
 

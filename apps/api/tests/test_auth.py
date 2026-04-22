@@ -9,9 +9,7 @@ async def test_login_me_logout(client: AsyncClient) -> None:
     r = await client.get("/api/auth/me")
     assert r.status_code == 401
 
-    r = await client.post(
-        "/api/auth/login", json={"email": "admin@local", "password": "change-me"}
-    )
+    r = await client.post("/api/auth/login", json={"email": "admin@local", "password": "change-me"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["email"] == "admin@local"
@@ -30,7 +28,5 @@ async def test_login_me_logout(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_login_bad_password(client: AsyncClient) -> None:
-    r = await client.post(
-        "/api/auth/login", json={"email": "admin@local", "password": "nope"}
-    )
+    r = await client.post("/api/auth/login", json={"email": "admin@local", "password": "nope"})
     assert r.status_code == 401

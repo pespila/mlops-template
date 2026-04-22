@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -86,9 +87,7 @@ async def create_run(
                 status_code=422,
                 detail="HPO enabled but search_space is empty",
             )
-        overlapping = set(payload.hyperparams or {}).intersection(
-            payload.hpo.search_space.keys()
-        )
+        overlapping = set(payload.hyperparams or {}).intersection(payload.hpo.search_space.keys())
         if overlapping:
             raise HTTPException(
                 status_code=422,
@@ -164,8 +163,10 @@ async def get_run_metrics(
 ) -> list[Metric]:
     await get_owned_run(db, run_id, user)
     rows = (
-        await db.execute(select(Metric).where(Metric.run_id == run_id).order_by(Metric.step))
-    ).scalars().all()
+        (await db.execute(select(Metric).where(Metric.run_id == run_id).order_by(Metric.step)))
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -176,9 +177,7 @@ async def get_run_artifacts(
     db: AsyncSession = Depends(get_db),
 ) -> list[ArtifactRead]:
     await get_owned_run(db, run_id, user)
-    rows = (
-        await db.execute(select(Artifact).where(Artifact.run_id == run_id))
-    ).scalars().all()
+    rows = (await db.execute(select(Artifact).where(Artifact.run_id == run_id))).scalars().all()
     return [ArtifactRead.from_row(r) for r in rows]
 
 
@@ -190,10 +189,10 @@ async def get_run_explanations(
 ) -> list[dict[str, object]]:
     await get_owned_run(db, run_id, user)
     rows = (
-        await db.execute(
-            select(ExplanationArtifact).where(ExplanationArtifact.run_id == run_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(ExplanationArtifact).where(ExplanationArtifact.run_id == run_id)))
+        .scalars()
+        .all()
+    )
     return [
         {
             "id": r.id,
@@ -212,9 +211,7 @@ async def get_run_bias(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, object]]:
     await get_owned_run(db, run_id, user)
-    rows = (
-        await db.execute(select(BiasReport).where(BiasReport.run_id == run_id))
-    ).scalars().all()
+    rows = (await db.execute(select(BiasReport).where(BiasReport.run_id == run_id))).scalars().all()
     return [
         {
             "id": r.id,
@@ -244,19 +241,23 @@ async def get_run_selected_hyperparams(
     run = await get_owned_run(db, run_id, user)
 
     row = (
-        await db.execute(
-            select(Artifact).where(
-                Artifact.run_id == run_id,
-                Artifact.kind == "selected_hyperparams",
+        (
+            await db.execute(
+                select(Artifact).where(
+                    Artifact.run_id == run_id,
+                    Artifact.kind == "selected_hyperparams",
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if row is not None:
         try:
             abs_path = storage.to_absolute(row.uri)
             if abs_path.exists():
                 return json.loads(abs_path.read_text())
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return {
         "source": "legacy",
@@ -284,8 +285,8 @@ async def get_run_logs(
     if not logs_path.exists():
         return []
 
-    from datetime import datetime as _dt, timezone as _tz
     import json as _json
+    from datetime import datetime as _dt
 
     out: list[dict[str, str]] = []
     for raw in logs_path.read_text(errors="replace").splitlines():
@@ -298,7 +299,7 @@ async def get_run_logs(
                 if isinstance(parsed, dict):
                     out.append(
                         {
-                            "ts": str(parsed.get("ts") or _dt.now(_tz.utc).isoformat()),
+                            "ts": str(parsed.get("ts") or _dt.now(UTC).isoformat()),
                             "level": str(parsed.get("level") or "info").lower(),
                             "message": str(parsed.get("message") or parsed.get("msg") or raw),
                         }
@@ -308,7 +309,7 @@ async def get_run_logs(
                 pass
         upper = raw.upper()
         level = "error" if "ERROR" in upper else ("warn" if "WARN" in upper else "info")
-        out.append({"ts": _dt.now(_tz.utc).isoformat(), "level": level, "message": raw})
+        out.append({"ts": _dt.now(UTC).isoformat(), "level": level, "message": raw})
     return out
 
 

@@ -27,7 +27,28 @@ def _infer_semantic(series: pd.Series) -> str:
     return "text"
 
 
-async def profile_dataset(ctx: dict[str, Any], dataset_id: str) -> dict[str, Any]:
+def _coerce_for_semantic(series: pd.Series, semantic: str) -> pd.Series:
+    """Re-interpret a raw series under a user-chosen semantic label.
+
+    Used when re-profiling after the user changed a column's type — e.g.
+    a date stored as string is now flagged as ``datetime`` and we want
+    null %/ unique / stats computed on the parsed datetime values.
+    """
+    if semantic == "datetime":
+        return pd.to_datetime(series, errors="coerce")
+    if semantic == "numeric":
+        return pd.to_numeric(series, errors="coerce")
+    if semantic == "boolean":
+        return series.astype("boolean", errors="ignore")
+    return series
+
+
+async def profile_dataset(
+    ctx: dict[str, Any],
+    dataset_id: str,
+    *,
+    preserve_user_types: bool = False,
+) -> dict[str, Any]:
     session_factory = ctx["session_factory"]
 
     async with session_factory() as db:
@@ -59,15 +80,29 @@ async def profile_dataset(ctx: dict[str, Any], dataset_id: str) -> dict[str, Any
             "columns": {},
         }
 
-        existing = (
-            await db.execute(select(FeatureSchema).where(FeatureSchema.dataset_id == dataset_id))
-        ).scalars().all()
-        for row in existing:
+        existing_rows = (
+            (await db.execute(select(FeatureSchema).where(FeatureSchema.dataset_id == dataset_id)))
+            .scalars()
+            .all()
+        )
+        user_types: dict[str, str] = {}
+        if preserve_user_types:
+            user_types = {
+                r.column_name: r.semantic_type for r in existing_rows if r.semantic_type is not None
+            }
+        for row in existing_rows:
             await db.delete(row)
         await db.flush()
 
         for col in df.columns:
-            series = df[col]
+            raw = df[col]
+            override = user_types.get(str(col))
+            if override:
+                semantic = override
+                series = _coerce_for_semantic(raw, override)
+            else:
+                semantic = _infer_semantic(raw)
+                series = raw
             missing_pct = float(series.isna().mean() * 100)
             unique_count = int(series.nunique(dropna=True))
             stats: dict[str, Any] = {"count": int(series.count())}
@@ -84,16 +119,16 @@ async def profile_dataset(ctx: dict[str, Any], dataset_id: str) -> dict[str, Any
             fs = FeatureSchema(
                 dataset_id=dataset_id,
                 column_name=str(col),
-                inferred_type=str(series.dtype),
-                semantic_type=_infer_semantic(series),
+                inferred_type=str(raw.dtype),
+                semantic_type=semantic,
                 stats_json=stats,
                 missing_pct=missing_pct,
                 unique_count=unique_count,
             )
             db.add(fs)
             summary["columns"][str(col)] = {
-                "dtype": str(series.dtype),
-                "semantic": _infer_semantic(series),
+                "dtype": str(raw.dtype),
+                "semantic": semantic,
                 "missing_pct": missing_pct,
                 "unique_count": unique_count,
             }

@@ -108,8 +108,10 @@ async def get_dataset_schema(
 ) -> list[FeatureSchemaRead]:
     await get_owned_dataset(db, dataset_id, user)
     rows = (
-        await db.execute(select(FeatureSchema).where(FeatureSchema.dataset_id == dataset_id))
-    ).scalars().all()
+        (await db.execute(select(FeatureSchema).where(FeatureSchema.dataset_id == dataset_id)))
+        .scalars()
+        .all()
+    )
     return [FeatureSchemaRead.from_row(r) for r in rows]
 
 
@@ -143,9 +145,7 @@ async def delete_dataset(
     # dependent experiments/runs first. Blocker count is kept global on
     # purpose: a dataset with runs from any user is not safe to delete.
     run_count = (
-        await db.execute(
-            select(func.count()).select_from(Run).where(Run.dataset_id == dataset_id)
-        )
+        await db.execute(select(func.count()).select_from(Run).where(Run.dataset_id == dataset_id))
     ).scalar_one()
     if run_count:
         raise HTTPException(
@@ -175,7 +175,7 @@ async def delete_dataset(
                 import shutil
 
                 shutil.rmtree(path, ignore_errors=True)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     return Response(status_code=204)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -16,8 +16,8 @@ async def cleanup(ctx: dict[str, Any]) -> dict[str, Any]:
     session_factory = ctx["session_factory"]
     settings = get_settings()
 
-    cutoff_preds = datetime.now(timezone.utc) - timedelta(days=settings.prediction_retention_days)
-    cutoff_arts = datetime.now(timezone.utc) - timedelta(days=settings.artifact_retention_days)
+    cutoff_preds = datetime.now(UTC) - timedelta(days=settings.prediction_retention_days)
+    cutoff_arts = datetime.now(UTC) - timedelta(days=settings.artifact_retention_days)
 
     async with session_factory() as db:
         pred_deleted = (

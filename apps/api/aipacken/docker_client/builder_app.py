@@ -245,9 +245,7 @@ async def save_image(req: SaveImageRequest) -> SaveImageResponse:
     data_root = "/var/platform-data"
     dest = os.path.abspath(req.dest_path)
     if not dest.startswith(data_root + os.sep):
-        raise HTTPException(
-            status_code=400, detail=f"dest_path must be under {data_root}"
-        )
+        raise HTTPException(status_code=400, detail=f"dest_path must be under {data_root}")
 
     client = get_docker()
     try:

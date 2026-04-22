@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
@@ -12,12 +12,12 @@ def _uuid_str() -> str:
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
     @declared_attr.directive
-    def __tablename__(cls) -> str:  # noqa: N805
+    def __tablename__(cls) -> str:
         name = cls.__name__
         out = [name[0].lower()]
         for ch in name[1:]:

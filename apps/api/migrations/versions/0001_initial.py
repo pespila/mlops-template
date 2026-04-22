@@ -80,9 +80,7 @@ def upgrade() -> None:
     op.create_table(
         "transform_configs",
         sa.Column("id", sa.String(length=36), primary_key=True),
-        sa.Column(
-            "dataset_id", sa.String(length=36), sa.ForeignKey("datasets.id"), nullable=False
-        ),
+        sa.Column("dataset_id", sa.String(length=36), sa.ForeignKey("datasets.id"), nullable=False),
         sa.Column("user_id", sa.String(length=36), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("target_column", sa.String(length=255), nullable=False),
         sa.Column("transforms_json", JSONB(), nullable=False),
@@ -126,9 +124,7 @@ def upgrade() -> None:
             sa.ForeignKey("experiments.id"),
             nullable=False,
         ),
-        sa.Column(
-            "dataset_id", sa.String(length=36), sa.ForeignKey("datasets.id"), nullable=False
-        ),
+        sa.Column("dataset_id", sa.String(length=36), sa.ForeignKey("datasets.id"), nullable=False),
         sa.Column(
             "transform_config_id",
             sa.String(length=36),
@@ -218,7 +214,9 @@ def upgrade() -> None:
         sa.Column("serving_image_uri", sa.String(length=512), nullable=True),
         *_ts_cols(),
     )
-    op.create_index("ix_model_versions_registered_model_id", "model_versions", ["registered_model_id"])
+    op.create_index(
+        "ix_model_versions_registered_model_id", "model_versions", ["registered_model_id"]
+    )
 
     op.create_table(
         "deployments",
@@ -294,7 +292,9 @@ def upgrade() -> None:
         sa.Column("kind", sa.String(length=64), nullable=False),
         *_ts_cols(),
     )
-    op.create_index("ix_data_lineages_upstream_dataset_id", "data_lineages", ["upstream_dataset_id"])
+    op.create_index(
+        "ix_data_lineages_upstream_dataset_id", "data_lineages", ["upstream_dataset_id"]
+    )
 
     op.create_table(
         "bias_reports",

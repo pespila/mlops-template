@@ -44,6 +44,7 @@ def ensure_base_dirs() -> None:
 
 # ---- dataset ----
 
+
 def dataset_dir(dataset_id: str) -> Path:
     return _root() / "datasets" / dataset_id
 
@@ -61,6 +62,7 @@ def dataset_profile_path(dataset_id: str) -> Path:
 
 
 # ---- run ----
+
 
 def run_dir(run_id: str) -> Path:
     return _root() / "runs" / run_id
@@ -95,11 +97,13 @@ def ensure_run_dirs(run_id: str) -> None:
 
 # ---- model ----
 
+
 def model_version_dir(model_version_id: str) -> Path:
     return _root() / "models" / model_version_id
 
 
 # ---- package ----
+
 
 def package_dir(package_id: str) -> Path:
     """Scratch build directory for a single package under construction."""
@@ -113,6 +117,7 @@ def package_tar_path(package_id: str) -> Path:
 
 
 # ---- generic ----
+
 
 def to_absolute(storage_path: str) -> Path:
     """Resolve a stored relative path (e.g. `runs/{id}/artifacts/model.pkl`) to disk."""

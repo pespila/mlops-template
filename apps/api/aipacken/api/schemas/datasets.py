@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+SEMANTIC_TYPES = ("numeric", "categorical", "datetime", "boolean", "text")
+SemanticType = Literal["numeric", "categorical", "datetime", "boolean", "text"]
 
 
 class DatasetCreate(BaseModel):
     name: str
+
+
+class DatasetPatch(BaseModel):
+    name: str | None = None
+
+
+class FeatureSchemaPatch(BaseModel):
+    semantic_type: SemanticType
 
 
 class FeatureSchemaRead(BaseModel):
@@ -28,9 +39,11 @@ class FeatureSchemaRead(BaseModel):
     null_fraction: float | None = Field(default=None, validation_alias="missing_pct")
 
     @classmethod
-    def from_row(cls, row: Any) -> "FeatureSchemaRead":
+    def from_row(cls, row: Any) -> FeatureSchemaRead:
         data = cls.model_validate(row)
-        if data.missing_pct is not None and (data.null_fraction is None or data.null_fraction > 1.5):
+        if data.missing_pct is not None and (
+            data.null_fraction is None or data.null_fraction > 1.5
+        ):
             data.null_fraction = data.missing_pct / 100.0
         data.name = row.column_name
         data.type = row.semantic_type or _coarse_to_feature_type(row.inferred_type)

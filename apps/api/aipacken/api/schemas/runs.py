@@ -5,8 +5,14 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-TaskKind = Literal["regression", "binary_classification", "multiclass_classification"]
+TaskKind = Literal[
+    "regression",
+    "binary_classification",
+    "multiclass_classification",
+    "forecasting",
+    "recommender",
+    "clustering",
+]
 
 
 class HpoSearchRangeInt(BaseModel):
@@ -122,7 +128,7 @@ class ArtifactRead(BaseModel):
     download_url: str = Field(default="")
 
     @classmethod
-    def from_row(cls, row: Any) -> "ArtifactRead":
+    def from_row(cls, row: Any) -> ArtifactRead:
         data = cls.model_validate(row)
         data.download_url = f"/api/artifacts/{data.id}/download"
         return data
