@@ -6,6 +6,7 @@ import structlog
 
 from aipacken.db.models import Deployment
 from aipacken.docker_client.builder_client import get_builder_client
+from aipacken.docker_client.traefik_sync import sync_model_routes
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
@@ -28,5 +29,9 @@ async def teardown_deployment(ctx: dict[str, Any], deployment_id: str) -> dict[s
         dep.container_id = None
         dep.internal_url = None
         await db.commit()
+        try:
+            await sync_model_routes(db)
+        except Exception:
+            logger.exception("teardown.traefik_sync_failed")
         await publish(f"deployment:{deployment_id}:events", {"status": "stopped"})
         return {"status": "stopped"}

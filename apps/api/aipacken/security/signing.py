@@ -34,9 +34,7 @@ class SignatureError(RuntimeError):
 def _secret() -> bytes:
     token = os.environ.get("INTERNAL_HMAC_TOKEN", "").strip()
     if not token:
-        raise SignatureError(
-            "INTERNAL_HMAC_TOKEN env var is required for artifact signing"
-        )
+        raise SignatureError("INTERNAL_HMAC_TOKEN env var is required for artifact signing")
     return token.encode("utf-8")
 
 

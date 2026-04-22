@@ -63,9 +63,7 @@ def _run_migrations() -> None:
     # Convert psycopg-async driver URL to a sync one for the advisory
     # lock session; Alembic itself also uses a sync engine under the
     # hood via the `sqlalchemy.url` config above.
-    sync_url = url.replace("postgresql+psycopg", "postgresql+psycopg").replace(
-        "+async", ""
-    )
+    sync_url = url.replace("postgresql+psycopg", "postgresql+psycopg").replace("+async", "")
     # Deterministic 64-bit key derived from a platform-specific string so
     # two independent apps sharing a Postgres instance do not contend.
     # `pg_advisory_lock(bigint)` signature: we pack the key as a single

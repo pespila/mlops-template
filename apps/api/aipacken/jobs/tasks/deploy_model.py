@@ -10,6 +10,7 @@ import structlog
 from aipacken.config import get_settings
 from aipacken.db.models import Deployment, ModelVersion
 from aipacken.docker_client.builder_client import get_builder_client
+from aipacken.docker_client.traefik_sync import sync_model_routes
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
@@ -49,13 +50,13 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
             "INTERNAL_INGEST_URL": "http://api:8000/api/internal/predictions",
             "INTERNAL_HMAC_TOKEN": settings.internal_hmac_token,
         }
+        # Per-model routing is published to Traefik's file provider via
+        # traefik_sync.sync_model_routes() below, not via container labels —
+        # the compose stack runs Traefik without --providers.docker so
+        # mounting the socket is not doubled up. The labels here are kept
+        # only for operator visibility (docker ps --filter label=...).
         labels = {
             "platform.deployment_id": dep.id,
-            "traefik.enable": "true",
-            f"traefik.http.routers.model-{dep.slug}.rule": f"PathPrefix(`/models/{dep.slug}`)",
-            f"traefik.http.routers.model-{dep.slug}.entrypoints": "web",
-            f"traefik.http.services.model-{dep.slug}.loadbalancer.server.port": "8000",
-            "traefik.docker.network": settings.models_network,
         }
 
         builder = get_builder_client()
@@ -105,5 +106,13 @@ async def deploy_model(ctx: dict[str, Any], deployment_id: str) -> dict[str, Any
         dep.status = "active" if ready else "unhealthy"
         dep.last_health_at = datetime.now(UTC)
         await db.commit()
+
+        # Publish the new route set to Traefik's dynamic config dir. The
+        # proxy's file-watcher picks it up within a second.
+        try:
+            await sync_model_routes(db)
+        except Exception:
+            logger.exception("deploy_model.traefik_sync_failed")
+
         await publish(f"deployment:{deployment_id}:events", {"status": dep.status})
         return {"status": dep.status, "container_id": container_id}

@@ -77,21 +77,25 @@ services:
     networks:
       - platform-net
 
+  # Traefik runs with the file provider only — api + frontend + per-model
+  # routes all live under infra/traefik/dynamic/*.yml. The compose labels
+  # that used to duplicate the static routes have been removed; the worker
+  # rewrites infra/traefik/dynamic/models.yml whenever a deployment
+  # starts/stops (aipacken.docker_client.traefik_sync).
   api:
     <<: *api-common
     command: ["uvicorn", "aipacken.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=PathPrefix(`/api`) || PathPrefix(`/sse`) || PathPrefix(`/openapi.json`) || PathPrefix(`/docs`)"
-      - "traefik.http.routers.api.entrypoints=web"
-      - "traefik.http.services.api.loadbalancer.server.port=8000"
-      - "traefik.docker.network=platform-net"
 
   worker:
     <<: *api-common
     command: ["arq", "aipacken.jobs.worker.WorkerSettings"]
-    labels:
-      - "traefik.enable=false"
+    environment:
+      TRAEFIK_DYNAMIC_DIR: /etc/traefik/dynamic
+    volumes:
+      - platform-data:/var/platform-data
+      # RW mount for the Traefik dynamic-routes dir so the worker can
+      # publish per-model routes as deployments come and go.
+      - ../traefik/dynamic:/etc/traefik/dynamic
 
   builder:
     <<: *api-common
@@ -99,8 +103,6 @@ services:
     volumes:
       - platform-data:/var/platform-data
       - /var/run/docker.sock:/var/run/docker.sock
-    labels:
-      - "traefik.enable=false"
 
   frontend:
     build:
@@ -109,10 +111,3 @@ services:
     image: platform/web:latest
     networks:
       - platform-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.frontend.entrypoints=web"
-      - "traefik.http.routers.frontend.priority=1"
-      - "traefik.http.services.frontend.loadbalancer.server.port=80"
-      - "traefik.docker.network=platform-net"

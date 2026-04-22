@@ -69,7 +69,9 @@ class TransformConfig(Base, IdMixin, TimestampsMixin):
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id"), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     target_column: Mapped[str] = mapped_column(String(255), nullable=False)
-    transforms_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    transforms_json: Mapped[dict[str, Any]] = mapped_column(
+        JsonColumn, nullable=False, default=dict
+    )
     split_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
     sensitive_features: Mapped[list[str] | None] = mapped_column(JsonColumn, nullable=True)
 
@@ -105,7 +107,9 @@ class Run(Base, IdMixin, TimestampsMixin):
     image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     container_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
-    hyperparams_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    hyperparams_json: Mapped[dict[str, Any]] = mapped_column(
+        JsonColumn, nullable=False, default=dict
+    )
     resource_limits_json: Mapped[dict[str, Any]] = mapped_column(
         JsonColumn, nullable=False, default=dict
     )
@@ -158,8 +162,12 @@ class ModelVersion(Base, IdMixin, TimestampsMixin):
     # Relative path inside /var/platform-data (e.g. `models/{mv_id}/model.pkl`
     # for sklearn-flavored models, or `models/{mv_id}/` directory for AutoGluon).
     storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    input_schema_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
-    output_schema_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    input_schema_json: Mapped[dict[str, Any]] = mapped_column(
+        JsonColumn, nullable=False, default=dict
+    )
+    output_schema_json: Mapped[dict[str, Any]] = mapped_column(
+        JsonColumn, nullable=False, default=dict
+    )
     serving_image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     registered_model: Mapped[RegisteredModel] = relationship(back_populates="versions")
@@ -219,7 +227,9 @@ class BiasReport(Base, IdMixin, TimestampsMixin):
     )
     sensitive_feature: Mapped[str] = mapped_column(String(255), nullable=False)
     metric_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    group_values_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    group_values_json: Mapped[dict[str, Any]] = mapped_column(
+        JsonColumn, nullable=False, default=dict
+    )
     overall_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
@@ -229,7 +239,9 @@ class ExplanationArtifact(Base, IdMixin, TimestampsMixin):
         ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    feature_importance_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
+    feature_importance_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JsonColumn, nullable=True
+    )
     artifact_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
 
