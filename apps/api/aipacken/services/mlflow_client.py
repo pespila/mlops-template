@@ -153,14 +153,21 @@ def _status_mlflow_to_platform(status: str) -> str:
 
 
 def find_run_by_platform_id(platform_run_id: str) -> MlflowRun | None:
-    """Look up an MLflow run by its ``platform.run_id`` tag."""
+    """Look up an MLflow run by its ``platform.run_id`` tag.
+
+    The tag name contains a dot, which MLflow's filter-string parser
+    treats as an identifier separator — so the key must be backtick-
+    quoted. Without the backticks ``tags.platform.run_id = 'x'`` is
+    parsed as three tokens and every search returns zero runs, which
+    is what bit Batch 35e in staging.
+    """
     client = get_client()
     if client is None:
         return None
     try:
         results = client.search_runs(
             experiment_ids=[e.experiment_id for e in client.search_experiments(max_results=500)],
-            filter_string=f"tags.platform.run_id = '{platform_run_id}'",
+            filter_string=f"tags.`platform.run_id` = '{platform_run_id}'",
             max_results=1,
         )
     except Exception as exc:
