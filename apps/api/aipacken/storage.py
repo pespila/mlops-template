@@ -22,22 +22,25 @@ def ensure_base_dirs() -> None:
 
     The platform-data volume is shared between the api/worker (running as
     root inside the container) and the trainer containers (running as uid
-    10001). We relax permissions here so the trainer can write into its
-    per-run subdirectory without a chown round-trip.
+    10001 with no shared GID configured). Until there is a shared group
+    (tracked follow-up: introduce an aipacken-data GID + switch to 2770),
+    the only portable permission that lets both containers write into the
+    per-run subdirectories is 0o777. S103 is suppressed inline because
+    tightening this is a deploy-time choice, not a code change.
     """
     import os as _os
 
     root = _root()
     root.mkdir(parents=True, exist_ok=True)
     try:
-        _os.chmod(root, 0o777)
+        _os.chmod(root, 0o777)  # noqa: S103
     except OSError:
         pass
     for sub in ("datasets", "runs", "models", "packages"):
         p = root / sub
         p.mkdir(parents=True, exist_ok=True)
         try:
-            _os.chmod(p, 0o777)
+            _os.chmod(p, 0o777)  # noqa: S103
         except OSError:
             pass
 
@@ -90,7 +93,7 @@ def ensure_run_dirs(run_id: str) -> None:
     for p in (run_dir(run_id), run_artifacts_dir(run_id), run_reports_dir(run_id)):
         p.mkdir(parents=True, exist_ok=True)
         try:
-            _os.chmod(p, 0o777)
+            _os.chmod(p, 0o777)  # noqa: S103 — see ensure_base_dirs() for rationale
         except OSError:
             pass
 

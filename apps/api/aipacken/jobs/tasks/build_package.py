@@ -446,16 +446,16 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
             if schema_file.exists():
                 schema_doc = json.loads(schema_file.read_text())
                 task_label = str(schema_doc.get("flavor") or task_label)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("build_package.schema_parse_failed", error=str(exc))
         sel_file = artifacts_out / "selected_hyperparams.json"
         try:
             if sel_file.exists():
                 sel = json.loads(sel_file.read_text())
                 task_label = str(sel.get("task") or task_label)
                 framework_label = str(sel.get("model_name") or framework_label)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("build_package.hyperparams_parse_failed", error=str(exc))
 
         readme = _README_TEMPLATE.format(
             model_name=model_name,

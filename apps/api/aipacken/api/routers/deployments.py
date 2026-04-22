@@ -117,11 +117,21 @@ async def delete_deployment(
     dep = await get_owned_deployment(db, deployment_id, user)
 
     if dep.container_id:
+        import structlog
+        from httpx import HTTPError
+
         from aipacken.docker_client.builder_client import get_builder_client
 
+        _log = structlog.get_logger(__name__)
         try:
             await get_builder_client().stop(dep.container_id, timeout=10)
-        except Exception:
+        except (HTTPError, OSError) as exc:
+            _log.warning(
+                "deployment.delete.stop_failed",
+                deployment_id=dep.id,
+                container_id=dep.container_id,
+                error=str(exc),
+            )
             # Stale container may already be gone; don't block the delete on it.
             pass
 
@@ -169,7 +179,9 @@ async def get_deployment_schema(
 
             try:
                 return _json.loads(schema_path.read_text())
-            except Exception:
+            except (OSError, _json.JSONDecodeError):
+                # Malformed / missing schema file — fall through to the
+                # empty-object default. Logged elsewhere by the trainer.
                 pass
 
     return {"type": "object", "properties": {}, "additionalProperties": True}

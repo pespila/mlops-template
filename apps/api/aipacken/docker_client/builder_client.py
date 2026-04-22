@@ -82,8 +82,14 @@ class BuilderClient:
             return r.json()
 
     async def wait(self, container_id: str) -> dict[str, Any]:
+        # timeout=None is deliberate: a training run can legitimately run for
+        # hours. The bound on how long this waits is the Arq job_timeout
+        # configured in aipacken.jobs.worker.WorkerSettings, which wraps the
+        # whole task. S113 is suppressed inline for that reason.
         async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=None, headers=self._auth_headers
+            base_url=self._base_url,
+            timeout=None,  # noqa: S113
+            headers=self._auth_headers,
         ) as c:
             r = await c.get(f"/wait/{container_id}")
             r.raise_for_status()
@@ -97,17 +103,25 @@ class BuilderClient:
         written tar in bytes.
         """
         payload = {"image": image, "dest_path": dest_path}
+        # ``docker save`` on a 3 GB AutoGluon image can take >1 minute over
+        # the unix socket. Bounded by the Arq task timeout around the
+        # build_package job.
         async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=None, headers=self._auth_headers
+            base_url=self._base_url,
+            timeout=None,  # noqa: S113
+            headers=self._auth_headers,
         ) as c:
             r = await c.post("/save_image", json=payload)
             r.raise_for_status()
             return r.json()
 
     async def stream_logs(self, container_id: str) -> httpx.Response:
-        # Caller iterates lines via aiter_lines; kept open until iteration completes.
+        # Long-poll log stream kept open for the lifetime of the caller's
+        # aiter_lines loop. Caller decides when to disconnect.
         client = httpx.AsyncClient(
-            base_url=self._base_url, timeout=None, headers=self._auth_headers
+            base_url=self._base_url,
+            timeout=None,  # noqa: S113
+            headers=self._auth_headers,
         )
         return await client.send(
             client.build_request("GET", f"/logs/{container_id}/stream"), stream=True

@@ -262,7 +262,9 @@ async def get_run_selected_hyperparams(
             abs_path = storage.to_absolute(row.uri)
             if abs_path.exists():
                 return json.loads(abs_path.read_text())
-        except Exception:
+        except (OSError, ValueError, json.JSONDecodeError):
+            # Fall back to the run.hyperparams_json-based legacy
+            # representation below.
             pass
     return {
         "source": "legacy",

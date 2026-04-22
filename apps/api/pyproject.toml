@@ -77,18 +77,19 @@ ignore = [
   "PLW0603", # global-statement — tracked in python.md P1 (redis_client._pool)
   "PLW2901", # for-loop-var-overwritten — idiomatic where used
   "RUF012",  # mutable-class-attribute — SQLAlchemy ORM pattern
-  # ---- debt tracked in docs/review/CODE_REVIEW_REPORT.md, fix in Batch 7 ----
-  "S110",    # try-except-pass (python.md P1)
-  "S113",    # httpx-no-timeout (perf.md P1)
-  "S103",    # os.chmod permissive (security.md P2 storage.py)
-  "S105",    # hardcoded-password (change-me defaults, tests)
-  "S108",    # hardcoded-temp-file (cleanup.py /tmp usage)
+  # S110/S113/S103/S105/S108 used to be suppressed here as tracked debt.
+  # Batch 18 went through every site: swallowed exceptions are narrowed
+  # + structured-logged, long-poll httpx calls are documented with inline
+  # noqa explaining the Arq timeout is authoritative, chmod 0o777 carries
+  # an inline noqa referring back to the shared-GID follow-up in
+  # storage.ensure_base_dirs. Any new violation must be justified at its
+  # call site, not added to this list.
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests legitimately use magic numbers in assertions, plaintext passwords
 # in fixture setup, and deferred imports after env-var monkey-patching.
-"tests/**" = ["S106", "PLR2004", "E402"]
+"tests/**" = ["S105", "S106", "PLR2004", "E402"]
 
 [tool.mypy]
 python_version = "3.11"

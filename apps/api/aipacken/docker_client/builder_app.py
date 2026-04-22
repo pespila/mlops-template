@@ -155,7 +155,7 @@ async def run_container(req: RunRequest) -> RunResponse:
             security_opt=["no-new-privileges"],
             user=req.user,
             pids_limit=512,
-            tmpfs={"/tmp": ""},
+            tmpfs={"/tmp": ""},  # noqa: S108 — container-internal tmpfs mount, not host path
             mem_limit=req.memory_bytes,
             nano_cpus=req.nano_cpus,
             mounts=mounts,

@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     platform_env: Literal["dev", "prod"] = "dev"
     platform_secret_key: str = Field(..., min_length=32)
     platform_admin_email: str = "admin@local"
-    platform_admin_password: str = "change-me"
+    # Dev placeholder — _reject_placeholder_secrets_in_prod below refuses
+    # to boot when PLATFORM_ENV=prod and this still carries "change-me*".
+    platform_admin_password: str = "change-me"  # noqa: S105
 
     database_url: str = "postgresql+psycopg://platform:platform@postgres:5432/platform"
     redis_url: str = "redis://redis:6379/0"
@@ -30,7 +32,8 @@ class Settings(BaseSettings):
     session_cookie_name: str = "platform_session"
     session_max_age_seconds: int = 86400
 
-    internal_hmac_token: str = "change-me-internal-hmac-token"
+    # Dev placeholder — same validator below blocks prod boot if unchanged.
+    internal_hmac_token: str = "change-me-internal-hmac-token"  # noqa: S105
 
     trainer_base_image: str = "platform/trainer-base:latest"
     serving_base_image: str = "platform/serving-base:latest"

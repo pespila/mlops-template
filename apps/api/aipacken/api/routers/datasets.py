@@ -217,6 +217,11 @@ async def delete_dataset(
     await db.delete(d)
     await db.commit()
 
+    import shutil
+
+    import structlog
+
+    _log = structlog.get_logger(__name__)
     for path in (raw, profile):
         if path is None:
             continue
@@ -224,11 +229,17 @@ async def delete_dataset(
             if path.is_file():
                 path.unlink()
             elif path.is_dir():
-                import shutil
-
                 shutil.rmtree(path, ignore_errors=True)
-        except Exception:
-            pass
+        except OSError as exc:
+            # Best-effort cleanup — the DB row is already gone, so a
+            # failed filesystem delete shouldn't 500 the caller. Surface
+            # it in logs so operators can sweep orphans later.
+            _log.warning(
+                "dataset.delete.cleanup_failed",
+                dataset_id=dataset_id,
+                path=str(path),
+                error=str(exc),
+            )
 
     return Response(status_code=204)
 
