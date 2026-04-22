@@ -40,7 +40,9 @@ def _prepare_hyperparams(
     merged: dict[str, Any] = {}
     if name == "xgboost":
         merged.update(
-            _XGB_EXTRA_DEFAULTS_REG if task3 == "regression" else _XGB_EXTRA_DEFAULTS_CLS
+            _XGB_EXTRA_DEFAULTS_REG
+            if task3 == "regression"
+            else _XGB_EXTRA_DEFAULTS_CLS
         )
     merged.update(hyperparams or {})
     return merged
@@ -51,7 +53,9 @@ def _encode_labels(
 ) -> tuple[pd.Series, pd.Series, Any | None]:
     if task3 == "regression":
         return y_train, y_val, None
-    if pd.api.types.is_numeric_dtype(y_train) and not pd.api.types.is_bool_dtype(y_train):
+    if pd.api.types.is_numeric_dtype(y_train) and not pd.api.types.is_bool_dtype(
+        y_train
+    ):
         return y_train, y_val, None
     from sklearn.preprocessing import LabelEncoder
 

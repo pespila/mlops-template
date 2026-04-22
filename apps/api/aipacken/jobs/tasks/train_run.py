@@ -1,4 +1,4 @@
-"""Training orchestration — pure filesystem, no S3/MLflow in sight.
+"""Training orchestration — spawns the trainer container, mirrors outputs.
 
 The worker spawns a trainer container with the platform-data volume mounted,
 waits for it to exit, then walks the run directory and mirrors:
@@ -11,11 +11,18 @@ waits for it to exit, then walks the run directory and mirrors:
 
 Each of those five steps commits independently so a later failure doesn't
 roll back earlier successes.
+
+Since Batch 33 the trainer also dual-writes to MLflow via its own
+platform_trainer.mlflow_sink — controlled by the MLFLOW_TRACKING_URI env
+var the worker forwards below. MLflow reads stay off by default; Batch
+34 flips the FastAPI reader proxy when MLFLOW_BACKEND=true, and Batch
+35 cuts the direct DB writes above.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +36,7 @@ from aipacken.db.models import (
     Artifact,
     BiasReport,
     Dataset,
+    Experiment,
     ExplanationArtifact,
     FeatureSchema,
     Metric,
@@ -163,6 +171,10 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
         dataset = await db.get(Dataset, run.dataset_id)
         tcfg = await db.get(TransformConfig, run.transform_config_id)
         entry = await db.get(ModelCatalogEntry, run.model_catalog_id)
+        # Experiment is looked up only so the trainer can tag its MLflow
+        # run with a human-readable experiment name; training does not
+        # depend on it being resolvable.
+        experiment = await db.get(Experiment, run.experiment_id)
         if not dataset or not tcfg or not entry:
             run.status = "failed"
             run.error_message = "missing_dependencies"
@@ -214,6 +226,17 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             # + any later platform-side joblib.load refuses unsigned or
             # tampered pickles. Must match what serving / build_package use.
             "INTERNAL_HMAC_TOKEN": settings.internal_hmac_token,
+            # MLflow dual-write target (Batch 33). Trainer's mlflow_sink is
+            # no-op when MLFLOW_TRACKING_URI is empty — the worker forwards
+            # whatever the .env carries. boto3 uses AWS_* to authenticate
+            # to the MinIO container on platform-net; MLFLOW_S3_ENDPOINT_URL
+            # points at that same MinIO so artifact uploads never touch the
+            # real AWS.
+            "MLFLOW_TRACKING_URI": os.environ.get("MLFLOW_TRACKING_URI", ""),
+            "MLFLOW_S3_ENDPOINT_URL": os.environ.get("MLFLOW_S3_ENDPOINT_URL", ""),
+            "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+            "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+            "MLFLOW_EXPERIMENT_NAME": (experiment.name if experiment is not None else "default"),
             "TRANSFORM_CONFIG": json.dumps(
                 {
                     "target": tcfg.target_column,

@@ -90,7 +90,13 @@ def _read_dataset(path: Path) -> pd.DataFrame:
     raise ValueError(f"unsupported dataset extension: {suffix!r}")
 
 
-def _append_metric(path: Path, name: str, value: float, step: int | None = None, phase: str | None = None) -> None:
+def _append_metric(
+    path: Path,
+    name: str,
+    value: float,
+    step: int | None = None,
+    phase: str | None = None,
+) -> None:
     row: dict[str, Any] = {"name": name, "value": float(value)}
     if step is not None:
         row["step"] = int(step)
@@ -98,6 +104,13 @@ def _append_metric(path: Path, name: str, value: float, step: int | None = None,
         row["phase"] = phase
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
+
+    # Dual-write to MLflow. No-op when MLFLOW_TRACKING_URI is unset or
+    # the tracking server is unreachable — the sink self-disables after
+    # the first failure so a down MLflow does not slow down training.
+    from platform_trainer import mlflow_sink
+
+    mlflow_sink.log_metric(name, float(value), step=step)
 
 
 def _feature_names(preprocessor: Any, fallback: list[str]) -> list[str]:
@@ -249,9 +262,7 @@ def _run_clustering(
     logger.info(
         "train.complete",
         extra={
-            "metrics": {
-                k: v for k, v in metrics.items() if isinstance(v, (int, float))
-            }
+            "metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
         },
     )
 
@@ -293,7 +304,11 @@ def _run_clustering(
     duration = time.monotonic() - t_start
     logger.info(
         "trainer.complete",
-        extra={"run_id": run_id, "duration_sec": round(duration, 2), "family": "clustering"},
+        extra={
+            "run_id": run_id,
+            "duration_sec": round(duration, 2),
+            "family": "clustering",
+        },
     )
     # Reports dir stays empty for clustering — SHAP/bias are supervised-only.
     _ = reports_dir  # keep signature stable; reports dir is pre-created.
@@ -466,7 +481,11 @@ def _run_forecasting(
     duration = time.monotonic() - t_start
     logger.info(
         "trainer.complete",
-        extra={"run_id": run_id, "duration_sec": round(duration, 2), "family": "forecasting"},
+        extra={
+            "run_id": run_id,
+            "duration_sec": round(duration, 2),
+            "family": "forecasting",
+        },
     )
     _ = reports_dir
     _ = run_dir
@@ -558,9 +577,7 @@ def _run_recommender(
         "title": "RecommenderInput",
         "flavor": "recommender",
         "serving_mode": (
-            "recommend_topk"
-            if feedback_type == "implicit"
-            else "recommend_score"
+            "recommend_topk" if feedback_type == "implicit" else "recommend_score"
         ),
         "user_column": user_col,
         "item_column": item_col,
@@ -592,7 +609,11 @@ def _run_recommender(
     duration = time.monotonic() - t_start
     logger.info(
         "trainer.complete",
-        extra={"run_id": run_id, "duration_sec": round(duration, 2), "family": "recommender"},
+        extra={
+            "run_id": run_id,
+            "duration_sec": round(duration, 2),
+            "family": "recommender",
+        },
     )
     _ = reports_dir
     _ = run_dir
@@ -613,7 +634,26 @@ def main() -> int:
     reports_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = run_dir / "metrics.jsonl"
 
-    logger.info("trainer.start", extra={"run_id": run_id, "dataset_path": str(dataset_path)})
+    logger.info(
+        "trainer.start", extra={"run_id": run_id, "dataset_path": str(dataset_path)}
+    )
+
+    # Begin the MLflow run at the very top of training so every subsequent
+    # _append_metric / log_param / log_artifact attaches to it. Experiment
+    # name comes from the env the worker injects (falls back to 'default').
+    # If MLflow is unreachable the sink self-disables; training proceeds
+    # exactly as before.
+    from platform_trainer import mlflow_sink
+
+    mlflow_experiment_name = _env("MLFLOW_EXPERIMENT_NAME") or "default"
+    mlflow_sink.begin(
+        run_id=run_id,
+        experiment_name=mlflow_experiment_name,
+        tags={
+            "platform.dataset_path": str(dataset_path),
+            "platform.run_dir": str(run_dir),
+        },
+    )
 
     try:
         transform_cfg = json.loads(_env("TRANSFORM_CONFIG") or "{}")
@@ -684,7 +724,11 @@ def main() -> int:
         # it back to the two-way enum where needed.
         model_catalog_for_task = json.loads(_env("MODEL_CATALOG") or "{}")
         requested_task = (model_catalog_for_task.get("task") or "").strip()
-        valid_tasks3 = {"regression", "binary_classification", "multiclass_classification"}
+        valid_tasks3 = {
+            "regression",
+            "binary_classification",
+            "multiclass_classification",
+        }
         if requested_task in valid_tasks3:
             task3 = requested_task  # type: ignore[assignment]
         else:
@@ -692,9 +736,12 @@ def main() -> int:
         task = transforms.coarse_task(task3)
         logger.info(
             "task.inferred",
-            extra={"task": task, "task3": task3, "rows": len(df), "source": (
-                "user" if requested_task in valid_tasks3 else "inferred"
-            )},
+            extra={
+                "task": task,
+                "task3": task3,
+                "rows": len(df),
+                "source": ("user" if requested_task in valid_tasks3 else "inferred"),
+            },
         )
 
         # Auto label-encode non-numeric classification targets so every adapter
@@ -705,7 +752,9 @@ def main() -> int:
         target_encoded: bool = False
         if task == "classification":
             y_series = df[target]
-            if not pd.api.types.is_numeric_dtype(y_series) or pd.api.types.is_bool_dtype(y_series):
+            if not pd.api.types.is_numeric_dtype(
+                y_series
+            ) or pd.api.types.is_bool_dtype(y_series):
                 from sklearn.preprocessing import LabelEncoder
 
                 target_label_encoder = LabelEncoder().fit(y_series)
@@ -748,9 +797,10 @@ def main() -> int:
         # AutoGluon carries ``time_limit`` / ``presets`` as regular hyperparams
         # on the new catalog shape; accept both the flat legacy payload and
         # the nested hyperparams dict to keep old runs working.
-        time_limit = int(
-            model_catalog.get("time_limit") or hyperparams.get("time_limit") or 0
-        ) or None
+        time_limit = (
+            int(model_catalog.get("time_limit") or hyperparams.get("time_limit") or 0)
+            or None
+        )
         presets = (
             model_catalog.get("presets")
             or hyperparams.get("presets")
@@ -821,6 +871,7 @@ def main() -> int:
                 direction_override = hpo_cfg.get("direction") or None
 
                 if name.startswith("sklearn_"):
+
                     def _prep(hp: dict[str, Any]) -> dict[str, Any]:
                         return adapter.prepare_hyperparams(name, hp)
 
@@ -842,6 +893,7 @@ def main() -> int:
                         prepare_hyperparams=_prep,
                     )
                 else:
+
                     def _prep_bt(hp: dict[str, Any]) -> dict[str, Any]:
                         return adapter.prepare_hyperparams(name, task3, hp)
 
@@ -926,7 +978,11 @@ def main() -> int:
 
         logger.info(
             "train.complete",
-            extra={"metrics": {k: v for k, v in metrics.items() if isinstance(v, (int, float))}},
+            extra={
+                "metrics": {
+                    k: v for k, v in metrics.items() if isinstance(v, (int, float))
+                }
+            },
         )
 
         # Feature importance ----------------------------------------------------
@@ -943,7 +999,11 @@ def main() -> int:
                 fi = model.feature_importance(val_df_with_target)
                 importance: dict[str, float] = {}
                 for feat, row in fi.iterrows():
-                    val = row.get("importance") if hasattr(row, "get") else row["importance"]
+                    val = (
+                        row.get("importance")
+                        if hasattr(row, "get")
+                        else row["importance"]
+                    )
                     if val is None or pd.isna(val):
                         continue
                     importance[str(feat)] = float(val)
@@ -957,7 +1017,9 @@ def main() -> int:
                 except Exception as exc:
                     logger.info("autogluon.plot_failed", extra={"error": str(exc)})
             except Exception as exc:
-                logger.warning("autogluon.feature_importance_failed", extra={"error": str(exc)})
+                logger.warning(
+                    "autogluon.feature_importance_failed", extra={"error": str(exc)}
+                )
         else:
             try:
                 sample_n = min(200, len(X_val))
@@ -1005,10 +1067,12 @@ def main() -> int:
 
         # Persist report JSON files for the backend to mirror into Postgres.
         if shap_report:
-            (reports_dir / "shap.json").write_text(json.dumps(
-                {"global_importance": shap_report.get("global_importance", {})},
-                default=str,
-            ))
+            (reports_dir / "shap.json").write_text(
+                json.dumps(
+                    {"global_importance": shap_report.get("global_importance", {})},
+                    default=str,
+                )
+            )
         if bias_report:
             (reports_dir / "bias.json").write_text(json.dumps(bias_report, default=str))
 
@@ -1058,7 +1122,9 @@ def main() -> int:
                 json.dumps(selected_doc, default=str)
             )
         except Exception as exc:
-            logger.warning("selected_hyperparams.write_failed", extra={"error": str(exc)})
+            logger.warning(
+                "selected_hyperparams.write_failed", extra={"error": str(exc)}
+            )
 
         # reports/hpo.json — full Optuna study summary (per-trial list capped
         # at 200). Only written on the HPO path.
@@ -1071,13 +1137,33 @@ def main() -> int:
                 logger.warning("hpo_report.write_failed", extra={"error": str(exc)})
 
         duration = time.monotonic() - t_start
-        logger.info("trainer.complete", extra={"run_id": run_id, "duration_sec": round(duration, 2)})
+        logger.info(
+            "trainer.complete",
+            extra={"run_id": run_id, "duration_sec": round(duration, 2)},
+        )
+
+        # Dual-write the artifact tree + selected_hyperparams + reports to
+        # MLflow so the tracking UI has the full run context. Local
+        # JSONL / disk paths remain authoritative until Batch 35.
+        try:
+            mlflow_sink.log_artifact(artifacts_dir, artifact_path="artifacts")
+            mlflow_sink.log_artifact(reports_dir, artifact_path="reports")
+            mlflow_sink.log_artifact(metrics_path, artifact_path=None)
+        except Exception as exc:  # noqa: BLE001 — telemetry must not fail the run
+            logger.warning("mlflow.artifact_sync_failed", extra={"error": str(exc)})
+        mlflow_sink.end("FINISHED")
+
         return 0
     except Exception as exc:
         logger.error(
             "trainer.failed",
-            extra={"run_id": run_id, "error": str(exc), "trace": traceback.format_exc()},
+            extra={
+                "run_id": run_id,
+                "error": str(exc),
+                "trace": traceback.format_exc(),
+            },
         )
+        mlflow_sink.end("FAILED")
         return 1
 
 

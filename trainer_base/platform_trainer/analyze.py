@@ -92,7 +92,9 @@ def compute_shap(
         else:
             predict_fn = lambda arr: estimator.predict(arr)  # noqa: E731
         bg_rows = min(50, X_pre.shape[0])
-        background = shap.sample(X_pre, bg_rows, random_state=0) if bg_rows > 0 else X_pre
+        background = (
+            shap.sample(X_pre, bg_rows, random_state=0) if bg_rows > 0 else X_pre
+        )
         explainer = shap.KernelExplainer(predict_fn, background)
         shap_values = explainer.shap_values(X_pre, nsamples=100, silent=True)
 
@@ -170,7 +172,9 @@ def compute_bias(
     )
 
     by_group = mf.by_group
-    frame = by_group.to_frame(name=metric) if isinstance(by_group, pd.Series) else by_group
+    frame = (
+        by_group.to_frame(name=metric) if isinstance(by_group, pd.Series) else by_group
+    )
     try:
         _save_bias_plot(frame, plot_path)
     except Exception:
@@ -179,7 +183,9 @@ def compute_bias(
     deltas: dict[str, float] = {}
     try:
         deltas["demographic_parity_difference"] = float(
-            demographic_parity_difference(y_true, y_pred, sensitive_features=sensitive_df)
+            demographic_parity_difference(
+                y_true, y_pred, sensitive_features=sensitive_df
+            )
         )
     except Exception:
         pass
@@ -194,11 +200,16 @@ def compute_bias(
     def _index_to_str(idx: Any) -> str:
         return "|".join(str(v) for v in idx) if isinstance(idx, tuple) else str(idx)
 
-    groups = {_index_to_str(k): v.to_dict() if hasattr(v, "to_dict") else float(v) for k, v in frame.iterrows()}
+    groups = {
+        _index_to_str(k): v.to_dict() if hasattr(v, "to_dict") else float(v)
+        for k, v in frame.iterrows()
+    }
 
     return {
         "metric": metric,
-        "overall": float(mf.overall) if np.isscalar(mf.overall) else mf.overall.to_dict(),
+        "overall": float(mf.overall)
+        if np.isscalar(mf.overall)
+        else mf.overall.to_dict(),
         "groups": groups,
         "deltas": deltas,
         "plot_path": str(plot_path),

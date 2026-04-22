@@ -26,7 +26,9 @@ def _leaderboard_to_dict(lb: pd.DataFrame) -> list[dict[str, Any]]:
     return lb.replace({np.nan: None}).to_dict(orient="records")
 
 
-def _classification_metrics(predictor: Any, val_df: pd.DataFrame, target: str) -> dict[str, float]:
+def _classification_metrics(
+    predictor: Any, val_df: pd.DataFrame, target: str
+) -> dict[str, float]:
     y_val = val_df[target]
     X_val = val_df.drop(columns=[target])
     y_pred = predictor.predict(X_val)
@@ -41,15 +43,21 @@ def _classification_metrics(predictor: Any, val_df: pd.DataFrame, target: str) -
                 metrics["auroc"] = float(roc_auc_score(y_val, proba.iloc[:, 1]))
             else:
                 metrics["auroc"] = float(
-                    roc_auc_score(y_val, proba.values, multi_class="ovr", average="macro")
+                    roc_auc_score(
+                        y_val, proba.values, multi_class="ovr", average="macro"
+                    )
                 )
-            metrics["log_loss"] = float(log_loss(y_val, proba.values, labels=list(proba.columns)))
+            metrics["log_loss"] = float(
+                log_loss(y_val, proba.values, labels=list(proba.columns))
+            )
     except (ValueError, AttributeError):
         pass
     return metrics
 
 
-def _regression_metrics(predictor: Any, val_df: pd.DataFrame, target: str) -> dict[str, float]:
+def _regression_metrics(
+    predictor: Any, val_df: pd.DataFrame, target: str
+) -> dict[str, float]:
     y_val = val_df[target]
     X_val = val_df.drop(columns=[target])
     y_pred = predictor.predict(X_val)
@@ -80,7 +88,9 @@ def fit(
     except ImportError as exc:
         raise RuntimeError("AutoGluon not installed in this image") from exc
 
-    problem_type = "regression" if task == "regression" else None  # let AG infer class count
+    problem_type = (
+        "regression" if task == "regression" else None
+    )  # let AG infer class count
     predictor_path = str(output_dir) if output_dir is not None else None
 
     predictor = TabularPredictor(

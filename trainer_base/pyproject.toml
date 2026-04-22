@@ -16,11 +16,27 @@ dependencies = [
   "xgboost==2.1.1",
   "lightgbm==4.5.0",
   "optuna==3.6.1",
+  # MLflow tracking — trainer writes every run's params/metrics/artifacts
+  # to the tracking server via MLFLOW_TRACKING_URI. mlflow pulls boto3
+  # transitively for artifact upload to the platform's MinIO.
+  "mlflow==2.17.2",
+  "boto3==1.35.79",
 ]
 
 [project.optional-dependencies]
 autogluon = [
   "autogluon.tabular[lightgbm,xgboost,catboost]==1.1.1",
+]
+# Forecasting models (sktime wraps statsmodels ARIMA / ETS).
+forecasting = [
+  "sktime==0.32.4",
+  "statsmodels==0.14.4",
+]
+# Recommender engines — Surprise for explicit, implicit for implicit feedback.
+recommender = [
+  "scikit-surprise==1.1.4",
+  "implicit==0.7.2",
+  "scipy==1.13.1",
 ]
 
 [build-system]

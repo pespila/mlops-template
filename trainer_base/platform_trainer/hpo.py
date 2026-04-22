@@ -131,9 +131,7 @@ def _score(
         proba = estimator.predict_proba(X_val)
         if task3 == "binary_classification" and proba.shape[1] == 2:
             return float(roc_auc_score(y_val, proba[:, 1]))
-        return float(
-            roc_auc_score(y_val, proba, multi_class="ovr", average="macro")
-        )
+        return float(roc_auc_score(y_val, proba, multi_class="ovr", average="macro"))
     raise ValueError(f"unsupported HPO metric: {metric!r}")
 
 
@@ -224,7 +222,9 @@ def run_hpo(
     sampler = TPESampler(seed=seed)
     study = optuna.create_study(direction=direction, sampler=sampler)
     try:
-        study.optimize(objective, n_trials=n_trials, timeout=timeout_sec, gc_after_trial=True)
+        study.optimize(
+            objective, n_trials=n_trials, timeout=timeout_sec, gc_after_trial=True
+        )
     except KeyboardInterrupt:  # pragma: no cover — trainer is non-interactive
         pass
 
@@ -262,7 +262,9 @@ def run_hpo(
     return best_estimator, best_metrics, report, label_encoder
 
 
-def write_report(path: Any, report: dict[str, Any], best_effective: dict[str, Any]) -> None:
+def write_report(
+    path: Any, report: dict[str, Any], best_effective: dict[str, Any]
+) -> None:
     """Write ``reports/hpo.json`` alongside the Optuna summary.
 
     ``best_effective`` is the full kwargs dict actually passed to the
