@@ -205,6 +205,10 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
             "DATASET_PATH": f"{settings.data_root}/{dataset_rel}",
             "DATASET_FILENAME": dataset_filename,
             "RUN_DIR": f"{settings.data_root}/runs/{run.id}",
+            # Trainer signs every model.pkl it writes so the serving container
+            # + any later platform-side joblib.load refuses unsigned or
+            # tampered pickles. Must match what serving / build_package use.
+            "INTERNAL_HMAC_TOKEN": settings.internal_hmac_token,
             "TRANSFORM_CONFIG": json.dumps(
                 {
                     "target": tcfg.target_column,

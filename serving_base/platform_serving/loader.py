@@ -52,8 +52,15 @@ def load(_legacy_uri: str = "") -> tuple[Any, dict[str, Any], dict[str, Any]]:
     else:
         import joblib
 
+        from platform_serving.signing import verify_file
+
         if not path.exists():
             raise RuntimeError(f"model artifact not found at {path}")
+        # HMAC-verify the artifact before unpickling — refuses to load any
+        # model.pkl whose .sig file is missing or does not match the shared
+        # INTERNAL_HMAC_TOKEN. Closes the pickle-RCE primitive against a
+        # compromised platform-data volume.
+        verify_file(path)
         model = joblib.load(path)
         schema_dir = path.parent
 

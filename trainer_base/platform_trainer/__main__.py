@@ -124,6 +124,23 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _task_family_for_protocol(fit_protocol: str) -> str:
+    """Map fit_protocol → coarse task family the trainer branches on.
+
+    Supervised covers both the default (missing protocol) and the explicit
+    sklearn/autogluon protocols. Everything else names its own family.
+    """
+    if fit_protocol in ("", "sklearn", "autogluon"):
+        return "supervised"
+    if fit_protocol == "sklearn_cluster":
+        return "clustering"
+    if fit_protocol == "sktime":
+        return "forecasting"
+    if fit_protocol in ("surprise", "implicit"):
+        return "recommender"
+    return "supervised"
+
+
 def _clean_feature_name(name: str) -> str:
     """Strip sklearn ColumnTransformer's `<step>__<col>` prefixes.
 
@@ -136,6 +153,450 @@ def _clean_feature_name(name: str) -> str:
     # one-hot expansions often come back as `col_value` already; if the
     # remaining half equals the step prefix, drop it.
     return base
+
+
+def _run_clustering(
+    *,
+    df: pd.DataFrame,
+    transform_cfg: dict[str, Any],
+    model_catalog: dict[str, Any],
+    run_dir: Path,
+    artifacts_dir: Path,
+    reports_dir: Path,
+    metrics_path: Path,
+    run_id: str,
+    t_start: float,
+) -> int:
+    """Unsupervised clustering pipeline.
+
+    Shares the preprocessor-once path with supervised runs (ColumnTransformer
+    handles scaling/encoding of the user-selected feature columns, no ``y``).
+    After fit we wrap the clusterer back into a Pipeline and joblib-dump so
+    the serving layer sees the same artifact shape as supervised runs.
+
+    The wizard's "feature columns" selection is honored via the existing
+    ``transforms`` list; any column not explicitly kept/dropped falls into
+    the ColumnTransformer's auto-passthrough bucket.
+    """
+    from sklearn.pipeline import Pipeline
+
+    from platform_trainer.adapters import get_adapter
+
+    name = (model_catalog.get("kind") or model_catalog.get("name") or "").strip()
+    hyperparams = model_catalog.get("hyperparams") or {}
+    signature = model_catalog.get("signature") or {}
+    task_class_map = signature.get("task_class_map") or {}
+    fit_protocol = (signature.get("fit_protocol") or "sklearn_cluster").strip()
+
+    # Clustering has no target — drop it if the user accidentally sent one
+    # (which the wizard shouldn't, but the API accepts arbitrary payloads).
+    target = transform_cfg.get("target") or None
+    feature_frame = df.drop(columns=[target]) if target and target in df.columns else df
+
+    user_semantic_types = transform_cfg.get("semantic_types") or {}
+    schema = transforms.coarse_schema(feature_frame, user_types=user_semantic_types)
+    preprocessor, kept_cols = transforms.build_column_transformer(
+        transforms=transform_cfg.get("transforms") or [],
+        schema=schema,
+    )
+
+    # A small validation holdout is useful for an "unbiased" silhouette; if
+    # the user didn't configure a split we keep it simple — 80/20.
+    split_config = transform_cfg.get("split") or {}
+    val_frac = float(split_config.get("val", 0.2) or 0.2)
+    val_frac = min(max(val_frac, 0.0), 0.5)
+    seed = int(split_config.get("seed", 42))
+    from sklearn.model_selection import train_test_split as _tts
+
+    if val_frac > 0 and len(feature_frame) > 10:
+        X_train, X_val = _tts(feature_frame, test_size=val_frac, random_state=seed)
+    else:
+        X_train = feature_frame
+        X_val = feature_frame.head(0)
+
+    X_train_np = preprocessor.fit_transform(X_train)
+    X_val_np = preprocessor.transform(X_val) if len(X_val) > 0 else None
+
+    adapter = get_adapter(name, fit_protocol=fit_protocol)
+    estimator, metrics, effective_hyperparams = adapter.fit_estimator(
+        name=name,
+        task3="clustering",
+        task_class_map=task_class_map,
+        X_train=X_train_np,
+        y_train=None,
+        X_val=X_val_np,
+        y_val=None,
+        hyperparams=hyperparams,
+    )
+
+    # Wrap preprocessor + clusterer into a Pipeline so serving's
+    # ``model.predict(DataFrame)`` goes through both stages (inductive case),
+    # or through the 1-NN TransductiveClusterer on preprocessed input
+    # (transductive case — wrapper still accepts preprocessed arrays).
+    model = Pipeline(steps=[("preprocess", preprocessor), ("model", estimator)])
+    import joblib
+
+    from platform_trainer.signing import sign_file
+
+    model_path = artifacts_dir / "model.pkl"
+    joblib.dump(model, model_path)
+    sign_file(model_path)
+
+    # Record metrics so the UI's metrics panel has data to render.
+    for metric_name, metric_value in metrics.items():
+        if isinstance(metric_value, (int, float)):
+            _append_metric(metrics_path, metric_name, float(metric_value))
+    logger.info(
+        "train.complete",
+        extra={
+            "metrics": {
+                k: v for k, v in metrics.items() if isinstance(v, (int, float))
+            }
+        },
+    )
+
+    # Input schema — flavor="clustering" tells the serving layer / predict.py
+    # to treat model.predict output as cluster labels, not class probabilities.
+    cols = [c for c in kept_cols if c in feature_frame.columns]
+    schema_doc = {
+        "type": "object",
+        "properties": {c: {"type": "number"} for c in cols},
+        "title": "ModelInput",
+        "flavor": "clustering",
+        "serving_mode": (
+            "assign"
+            if name in {"sklearn_dbscan", "sklearn_agglomerative"}
+            else "predict"
+        ),
+        "target": None,
+        "target_classes": None,
+        "target_encoded": False,
+    }
+    (artifacts_dir / "input_schema.json").write_text(json.dumps(schema_doc))
+
+    # selected_hyperparams.json keeps parity with supervised runs.
+    try:
+        selected_doc = {
+            "source": "user",
+            "model_name": name,
+            "task": "clustering",
+            "hyperparameters": {
+                str(k): _json_safe(v) for k, v in (effective_hyperparams or {}).items()
+            },
+        }
+        (artifacts_dir / "selected_hyperparams.json").write_text(
+            json.dumps(selected_doc, default=str)
+        )
+    except Exception as exc:
+        logger.warning("selected_hyperparams.write_failed", extra={"error": str(exc)})
+
+    duration = time.monotonic() - t_start
+    logger.info(
+        "trainer.complete",
+        extra={"run_id": run_id, "duration_sec": round(duration, 2), "family": "clustering"},
+    )
+    # Reports dir stays empty for clustering — SHAP/bias are supervised-only.
+    _ = reports_dir  # keep signature stable; reports dir is pre-created.
+    return 0
+
+
+def _run_forecasting(
+    *,
+    df: pd.DataFrame,
+    transform_cfg: dict[str, Any],
+    model_catalog: dict[str, Any],
+    run_dir: Path,
+    artifacts_dir: Path,
+    reports_dir: Path,
+    metrics_path: Path,
+    run_id: str,
+    t_start: float,
+) -> int:
+    """Univariate forecasting pipeline.
+
+    Expects ``transform_cfg['roles']`` to carry ``time_column``,
+    ``target_column`` (the value to forecast), and ``horizon``. The training
+    split is a temporal holdout: the last ``val_frac`` of rows go to
+    validation, the rest to training. Random splits are forbidden here —
+    they leak future-into-past.
+    """
+    from platform_trainer.adapters import get_adapter
+
+    name = (model_catalog.get("kind") or model_catalog.get("name") or "").strip()
+    hyperparams = model_catalog.get("hyperparams") or {}
+    signature = model_catalog.get("signature") or {}
+    fit_protocol = (signature.get("fit_protocol") or "sktime").strip()
+
+    roles = transform_cfg.get("roles") or {}
+    time_col = roles.get("time_column") or transform_cfg.get("time_column")
+    value_col = roles.get("target_column") or transform_cfg.get("target")
+    horizon = int(roles.get("horizon") or 12)
+    if not time_col or not value_col:
+        raise ValueError(
+            "forecasting requires transform_cfg.roles.time_column and target_column"
+        )
+    if time_col not in df.columns:
+        raise ValueError(f"time column {time_col!r} not in dataset")
+    if value_col not in df.columns:
+        raise ValueError(f"value column {value_col!r} not in dataset")
+
+    # Build the y Series indexed by parsed time, sorted ascending. pandas'
+    # ``to_datetime`` handles most ISO / locale formats; non-parseable entries
+    # become NaT and get dropped.
+    ts = pd.to_datetime(df[time_col], errors="coerce")
+    y = pd.Series(df[value_col].values, index=pd.DatetimeIndex(ts))
+    y = y[~y.index.isna()].dropna()
+
+    # Real datasets commonly have duplicate timestamps (multi-SKU rows on the
+    # same day, multi-store per hour, …). sktime/statsmodels wrap the series
+    # in a stats ``DatetimeIndex`` and require both uniqueness AND a known
+    # frequency — otherwise `.predict(fh=…)` blows up in
+    # `DatetimeIndex.to_period(freq)` with "You must pass a freq argument as
+    # current index has none."  Collapse dups by sum (additive for sales /
+    # counts, which is the default forecasting use case).
+    dup_count = int(y.index.duplicated().sum())
+    if dup_count:
+        y = y.groupby(level=0).sum()
+        logger.info(
+            "forecasting.dedup",
+            extra={"duplicates_collapsed": dup_count, "rows_after": len(y)},
+        )
+    y = y.sort_index()
+
+    # Try to infer a frequency from the (now-unique) timestamps. If that fails
+    # — irregular dates, gaps, mixed cadence — fall back to daily resampling
+    # with ``sum`` (which fills gap days with 0, a reasonable prior for sales).
+    inferred_freq = None
+    try:
+        inferred_freq = pd.infer_freq(y.index)
+    except Exception:  # noqa: BLE001
+        inferred_freq = None
+    if inferred_freq:
+        y.index.freq = inferred_freq  # type: ignore[misc]
+    else:
+        logger.info("forecasting.resample_daily", extra={"reason": "freq_not_inferred"})
+        y = y.resample("D").sum()
+        y.index.freq = "D"  # type: ignore[misc]
+        inferred_freq = "D"
+
+    if len(y) < max(horizon + 5, 20):
+        raise ValueError(
+            f"series too short for forecasting after dedup/resample: "
+            f"{len(y)} rows, need >= {max(horizon + 5, 20)}"
+        )
+
+    # Temporal split: last `horizon` rows go to validation so the metric
+    # reflects an out-of-sample forecast of the requested length.
+    y_train = y.iloc[:-horizon]
+    y_val = y.iloc[-horizon:]
+
+    adapter = get_adapter(name, fit_protocol=fit_protocol)
+    forecaster, metrics, effective_hyperparams = adapter.fit_estimator(
+        name=name,
+        task3="forecasting",
+        task_class_map=(signature.get("task_class_map") or {}),
+        X_train=None,
+        y_train=y_train,
+        X_val=None,
+        y_val=y_val,
+        hyperparams=hyperparams,
+    )
+
+    # Persist the fitted forecaster. sktime forecasters pickle cleanly; the
+    # serving layer loads it with joblib the same way as sklearn models.
+    import joblib
+
+    from platform_trainer.signing import sign_file
+
+    model_path = artifacts_dir / "model.pkl"
+    joblib.dump(forecaster, model_path)
+    sign_file(model_path)
+
+    for metric_name, metric_value in metrics.items():
+        if isinstance(metric_value, (int, float)):
+            _append_metric(metrics_path, metric_name, float(metric_value))
+    logger.info(
+        "train.complete",
+        extra={
+            "metrics": {
+                k: v for k, v in metrics.items() if isinstance(v, (int, float))
+            },
+            "family": "forecasting",
+        },
+    )
+
+    # Save the training series so the serving container can reconstruct the
+    # ForecastingHorizon against the same end date. predict.py reads this.
+    try:
+        y.to_frame("value").to_csv(artifacts_dir / "y_train.csv", index_label="ts")
+    except Exception as exc:
+        logger.warning("forecasting.y_train_write_failed", extra={"error": str(exc)})
+
+    schema_doc = {
+        "type": "object",
+        "properties": {"horizon": {"type": "integer"}},
+        "title": "ForecastInput",
+        "flavor": "forecasting",
+        "serving_mode": "forecast",
+        "target": value_col,
+        "time_column": time_col,
+        "horizon": horizon,
+        "last_train_timestamp": str(y.index[-1]) if len(y) else None,
+        "frequency": inferred_freq,
+        "target_classes": None,
+        "target_encoded": False,
+    }
+    (artifacts_dir / "input_schema.json").write_text(json.dumps(schema_doc))
+
+    try:
+        selected_doc = {
+            "source": "user",
+            "model_name": name,
+            "task": "forecasting",
+            "hyperparameters": {
+                str(k): _json_safe(v) for k, v in (effective_hyperparams or {}).items()
+            },
+        }
+        (artifacts_dir / "selected_hyperparams.json").write_text(
+            json.dumps(selected_doc, default=str)
+        )
+    except Exception as exc:
+        logger.warning("selected_hyperparams.write_failed", extra={"error": str(exc)})
+
+    duration = time.monotonic() - t_start
+    logger.info(
+        "trainer.complete",
+        extra={"run_id": run_id, "duration_sec": round(duration, 2), "family": "forecasting"},
+    )
+    _ = reports_dir
+    _ = run_dir
+    return 0
+
+
+def _run_recommender(
+    *,
+    df: pd.DataFrame,
+    transform_cfg: dict[str, Any],
+    model_catalog: dict[str, Any],
+    run_dir: Path,
+    artifacts_dir: Path,
+    reports_dir: Path,
+    metrics_path: Path,
+    run_id: str,
+    t_start: float,
+) -> int:
+    """Collaborative-filtering pipeline (Surprise or implicit)."""
+    from platform_trainer.adapters import get_adapter
+
+    name = (model_catalog.get("kind") or model_catalog.get("name") or "").strip()
+    hyperparams = model_catalog.get("hyperparams") or {}
+    signature = model_catalog.get("signature") or {}
+    fit_protocol = (signature.get("fit_protocol") or "surprise").strip()
+
+    roles = transform_cfg.get("roles") or {}
+    user_col = roles.get("user_column")
+    item_col = roles.get("item_column")
+    rating_col = roles.get("rating_column")
+    feedback_type = roles.get("feedback_type") or "explicit"
+    if not user_col or not item_col or not rating_col:
+        raise ValueError(
+            "recommender requires transform_cfg.roles "
+            "user_column / item_column / rating_column"
+        )
+    for c in (user_col, item_col, rating_col):
+        if c not in df.columns:
+            raise ValueError(f"column {c!r} not in dataset")
+
+    interactions = df[[user_col, item_col, rating_col]].dropna()
+    interactions.columns = ["user_id", "item_id", "rating"]
+
+    adapter = get_adapter(name, fit_protocol=fit_protocol)
+    model, metrics, effective_hyperparams = adapter.fit_estimator(
+        name=name,
+        task3="recommender",
+        task_class_map=(signature.get("task_class_map") or {}),
+        X_train=None,
+        y_train=None,
+        X_val=None,
+        y_val=None,
+        hyperparams={
+            **hyperparams,
+            "_interactions": interactions,
+            "_feedback_type": feedback_type,
+            "_split_seed": int((transform_cfg.get("split") or {}).get("seed", 42)),
+        },
+    )
+
+    import joblib
+
+    from platform_trainer.signing import sign_file
+
+    model_path = artifacts_dir / "model.pkl"
+    joblib.dump(model, model_path)
+    sign_file(model_path)
+
+    for metric_name, metric_value in metrics.items():
+        if isinstance(metric_value, (int, float)):
+            _append_metric(metrics_path, metric_name, float(metric_value))
+    logger.info(
+        "train.complete",
+        extra={
+            "metrics": {
+                k: v for k, v in metrics.items() if isinstance(v, (int, float))
+            },
+            "family": "recommender",
+        },
+    )
+
+    schema_doc = {
+        "type": "object",
+        "properties": {
+            "user_id": {"type": "string"},
+            "item_id": {"type": "string"},
+            "k": {"type": "integer"},
+        },
+        "title": "RecommenderInput",
+        "flavor": "recommender",
+        "serving_mode": (
+            "recommend_topk"
+            if feedback_type == "implicit"
+            else "recommend_score"
+        ),
+        "user_column": user_col,
+        "item_column": item_col,
+        "rating_column": rating_col,
+        "feedback_type": feedback_type,
+        "target": None,
+        "target_classes": None,
+        "target_encoded": False,
+    }
+    (artifacts_dir / "input_schema.json").write_text(json.dumps(schema_doc))
+
+    try:
+        selected_doc = {
+            "source": "user",
+            "model_name": name,
+            "task": "recommender",
+            "hyperparameters": {
+                str(k): _json_safe(v)
+                for k, v in (effective_hyperparams or {}).items()
+                if not str(k).startswith("_")
+            },
+        }
+        (artifacts_dir / "selected_hyperparams.json").write_text(
+            json.dumps(selected_doc, default=str)
+        )
+    except Exception as exc:
+        logger.warning("selected_hyperparams.write_failed", extra={"error": str(exc)})
+
+    duration = time.monotonic() - t_start
+    logger.info(
+        "trainer.complete",
+        extra={"run_id": run_id, "duration_sec": round(duration, 2), "family": "recommender"},
+    )
+    _ = reports_dir
+    _ = run_dir
+    return 0
 
 
 def main() -> int:
@@ -161,13 +622,60 @@ def main() -> int:
         if not isinstance(sensitive_features, list):
             raise ValueError("SENSITIVE_FEATURES must be a JSON list")
 
+        # Peek at MODEL_CATALOG to decide whether this is a supervised run
+        # (needs a target column) or an unsupervised family like clustering
+        # (no target, just feature columns). The signature drives the branch.
+        model_catalog_peek = json.loads(_env("MODEL_CATALOG") or "{}")
+        signature_peek = model_catalog_peek.get("signature") or {}
+        fit_protocol_peek = (signature_peek.get("fit_protocol") or "").strip().lower()
+        task_family_peek = _task_family_for_protocol(fit_protocol_peek)
+
         target = transform_cfg.get("target")
-        if not target:
-            raise ValueError("TRANSFORM_CONFIG.target is required")
+        if task_family_peek == "supervised" and not target:
+            raise ValueError("TRANSFORM_CONFIG.target is required for supervised runs")
 
         df = _read_dataset(dataset_path)
-        if target not in df.columns:
+        if target and target not in df.columns:
+            # Clustering may legitimately have no target; only check membership
+            # when one was supplied.
             raise ValueError(f"target column {target!r} not in dataset")
+
+        if task_family_peek == "clustering":
+            return _run_clustering(
+                df=df,
+                transform_cfg=transform_cfg,
+                model_catalog=model_catalog_peek,
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                reports_dir=reports_dir,
+                metrics_path=metrics_path,
+                run_id=run_id,
+                t_start=t_start,
+            )
+        if task_family_peek == "forecasting":
+            return _run_forecasting(
+                df=df,
+                transform_cfg=transform_cfg,
+                model_catalog=model_catalog_peek,
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                reports_dir=reports_dir,
+                metrics_path=metrics_path,
+                run_id=run_id,
+                t_start=t_start,
+            )
+        if task_family_peek == "recommender":
+            return _run_recommender(
+                df=df,
+                transform_cfg=transform_cfg,
+                model_catalog=model_catalog_peek,
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                reports_dir=reports_dir,
+                metrics_path=metrics_path,
+                run_id=run_id,
+                t_start=t_start,
+            )
 
         # The API may have persisted a user-chosen task override inside
         # MODEL_CATALOG (see apps/api/.../runs router). If absent or invalid,
@@ -221,7 +729,10 @@ def main() -> int:
             task=task,
         )
 
-        schema = transforms.coarse_schema(df.drop(columns=[target]))
+        user_semantic_types = transform_cfg.get("semantic_types") or {}
+        schema = transforms.coarse_schema(
+            df.drop(columns=[target]), user_types=user_semantic_types
+        )
         preprocessor, kept_cols = transforms.build_column_transformer(
             transforms=transform_cfg.get("transforms") or [],
             schema=schema,
@@ -231,6 +742,7 @@ def main() -> int:
         hyperparams = model_catalog.get("hyperparams") or {}
         signature = model_catalog.get("signature") or {}
         task_class_map = signature.get("task_class_map") or {}
+        fit_protocol = (signature.get("fit_protocol") or "").strip() or None
         hpo_cfg = model_catalog.get("hpo") or None
         hpo_enabled = bool(hpo_cfg and hpo_cfg.get("enabled"))
         # AutoGluon carries ``time_limit`` / ``presets`` as regular hyperparams
@@ -245,7 +757,7 @@ def main() -> int:
             or "medium_quality"
         )
 
-        adapter = get_adapter(name)
+        adapter = get_adapter(name, fit_protocol=fit_protocol)
 
         model: Any
         metrics: dict[str, Any]
@@ -402,7 +914,11 @@ def main() -> int:
             # Persist the fitted pipeline (preprocessor + estimator) for serving.
             import joblib
 
-            joblib.dump(model, artifacts_dir / "model.pkl")
+            from platform_trainer.signing import sign_file
+
+            _mpath = artifacts_dir / "model.pkl"
+            joblib.dump(model, _mpath)
+            sign_file(_mpath)
 
         for _metric_name, _metric_value in metrics.items():
             if isinstance(_metric_value, (int, float)):
