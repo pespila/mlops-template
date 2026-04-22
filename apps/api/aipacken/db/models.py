@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     DateTime,
     Float,
@@ -18,6 +19,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from aipacken.db.base import Base, IdMixin, TimestampsMixin
+
+# Portable JSON column type: JSONB on Postgres (GIN-indexable, compact
+# binary), plain JSON on SQLite (test-only). Having one definition keeps
+# the test env from needing the JSONB → JSON monkey-patch that lived in
+# tests/conftest.py.
+JsonColumn = JSON().with_variant(JSONB, "postgresql")
 
 
 class User(Base, IdMixin, TimestampsMixin):
@@ -39,7 +46,7 @@ class Dataset(Base, IdMixin, TimestampsMixin):
     checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="uploaded", nullable=False)
     profile_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    profile_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    profile_summary_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
 
 
 class FeatureSchema(Base, IdMixin, TimestampsMixin):
@@ -49,7 +56,7 @@ class FeatureSchema(Base, IdMixin, TimestampsMixin):
     column_name: Mapped[str] = mapped_column(String(255), nullable=False)
     inferred_type: Mapped[str] = mapped_column(String(64), nullable=False)
     semantic_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    stats_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    stats_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
     missing_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     unique_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -62,9 +69,9 @@ class TransformConfig(Base, IdMixin, TimestampsMixin):
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id"), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     target_column: Mapped[str] = mapped_column(String(255), nullable=False)
-    transforms_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    split_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    sensitive_features: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    transforms_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    split_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    sensitive_features: Mapped[list[str] | None] = mapped_column(JsonColumn, nullable=True)
 
 
 class ModelCatalogEntry(Base, IdMixin, TimestampsMixin):
@@ -72,7 +79,7 @@ class ModelCatalogEntry(Base, IdMixin, TimestampsMixin):
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     framework: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    signature_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    signature_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
     origin: Mapped[str] = mapped_column(String(64), default="builtin", nullable=False)
     image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
@@ -98,9 +105,9 @@ class Run(Base, IdMixin, TimestampsMixin):
     image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
     container_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
-    hyperparams_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    hyperparams_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
     resource_limits_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict
+        JsonColumn, nullable=False, default=dict
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -151,8 +158,8 @@ class ModelVersion(Base, IdMixin, TimestampsMixin):
     # Relative path inside /var/platform-data (e.g. `models/{mv_id}/model.pkl`
     # for sklearn-flavored models, or `models/{mv_id}/` directory for AutoGluon).
     storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    input_schema_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
-    output_schema_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    input_schema_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
+    output_schema_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
     serving_image_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     registered_model: Mapped[RegisteredModel] = relationship(back_populates="versions")
@@ -186,8 +193,8 @@ class Prediction(Base, IdMixin):
     output_ref: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    input_preview_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    output_preview_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    input_preview_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
+    output_preview_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
 
     __table_args__ = (Index("ix_prediction_deployment_received", "deployment_id", "received_at"),)
 
@@ -212,7 +219,7 @@ class BiasReport(Base, IdMixin, TimestampsMixin):
     )
     sensitive_feature: Mapped[str] = mapped_column(String(255), nullable=False)
     metric_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    group_values_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    group_values_json: Mapped[dict[str, Any]] = mapped_column(JsonColumn, nullable=False, default=dict)
     overall_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     report_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
@@ -222,7 +229,7 @@ class ExplanationArtifact(Base, IdMixin, TimestampsMixin):
         ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    feature_importance_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    feature_importance_json: Mapped[dict[str, Any] | None] = mapped_column(JsonColumn, nullable=True)
     artifact_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
 

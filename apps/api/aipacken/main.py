@@ -35,18 +35,50 @@ def _run_migrations() -> None:
     """Run Alembic migrations synchronously on startup.
 
     The app lifecycle is authoritative here — we don't want operators to
-    remember a separate `alembic upgrade head` step.
+    remember a separate ``alembic upgrade head`` step.
+
+    A pg advisory lock gates the upgrade so rolling deploys with >1 api
+    replica don't race on DDL (db.md P0 "Migrations run on every replica's
+    lifespan, uncoordinated"). The first replica grabs the lock, runs
+    the upgrade, releases it; the others wait then find head == current.
+    SQLite has no advisory-lock concept and we only ever run one API
+    process against it, so we skip the lock there.
     """
     from pathlib import Path
 
     from alembic import command
     from alembic.config import Config
+    from sqlalchemy import create_engine, text
 
     app_root = Path(__file__).resolve().parent.parent
     cfg = Config(str(app_root / "alembic.ini"))
     cfg.set_main_option("script_location", str(app_root / "migrations"))
-    cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
-    command.upgrade(cfg, "head")
+    url = get_settings().database_url
+    cfg.set_main_option("sqlalchemy.url", url)
+
+    if not url.startswith("postgresql"):
+        command.upgrade(cfg, "head")
+        return
+
+    # Convert psycopg-async driver URL to a sync one for the advisory
+    # lock session; Alembic itself also uses a sync engine under the
+    # hood via the `sqlalchemy.url` config above.
+    sync_url = url.replace("postgresql+psycopg", "postgresql+psycopg").replace(
+        "+async", ""
+    )
+    # Deterministic 64-bit key derived from a platform-specific string so
+    # two independent apps sharing a Postgres instance do not contend.
+    # `pg_advisory_lock(bigint)` signature: we pack the key as a single
+    # bigint — 0x4149504143454E21 ("AIPACEN!" as bytes).
+    lock_key = 0x4149504143454E21
+    eng = create_engine(sync_url, pool_pre_ping=True)
+    with eng.begin() as conn:
+        conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": lock_key})
+        try:
+            command.upgrade(cfg, "head")
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+    eng.dispose()
 
 
 @asynccontextmanager

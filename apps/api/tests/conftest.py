@@ -39,15 +39,9 @@ async def engine() -> AsyncIterator[Any]:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    # JSONB → JSON fallback for sqlite: replace the dialect-specific JSONB columns.
-    from sqlalchemy import JSON
-    from sqlalchemy.dialects.postgresql import JSONB
-
-    for table in Base.metadata.tables.values():
-        for col in table.columns:
-            if isinstance(col.type, JSONB):
-                col.type = JSON()
-
+    # JSONB → JSON fallback is now handled at the column type level via
+    # `JsonColumn = JSON().with_variant(JSONB, "postgresql")` in db/models.py,
+    # so no runtime type patching is needed here any more.
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng
