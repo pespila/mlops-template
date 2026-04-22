@@ -74,6 +74,15 @@ async def ping(_ctx: dict[str, Any]) -> str:
 async def startup(ctx: dict[str, Any]) -> None:
     ctx["session_factory"] = SessionLocal
     ctx["redis"] = get_redis()
+    # Same auto-instrumentation as the api. httpx / redis / sqlalchemy
+    # spans cover the real per-job work; train_run.py's docker calls go
+    # through httpx → builder → docker so they show up end-to-end.
+    try:
+        from aipacken.observability import init_tracing
+
+        init_tracing(service_name="aipacken-worker")
+    except Exception as exc:
+        logger.warning("worker.otel.init_failed", error=str(exc))
     logger.info("worker.startup", queue=ctx.get("queue_name"))
 
 

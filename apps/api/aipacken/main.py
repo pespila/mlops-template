@@ -107,6 +107,16 @@ def create_app() -> FastAPI:
 
     app.include_router(sse.router, prefix="/sse")
 
+    # OpenTelemetry — auto-instruments FastAPI + SQLAlchemy + httpx +
+    # Redis. Safe to call when OTEL_SDK_DISABLED=true (dev / tests) or
+    # when no OTel Collector is running; BatchSpanProcessor just buffers
+    # spans that never leave. Compose overlay `docker-compose.otel.yml`
+    # starts the Collector on otel-collector:4317 (tracked separately).
+    from aipacken.observability import init_tracing, instrument_fastapi_app
+
+    init_tracing(service_name="aipacken-api")
+    instrument_fastapi_app(app)
+
     # Prometheus metrics — /metrics exposes the default http_requests_total
     # + http_request_duration_seconds plus every router as a label. Addresses
     # perf.md P0 'No observability at all' as a first deliverable; fuller

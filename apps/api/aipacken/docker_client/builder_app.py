@@ -51,6 +51,16 @@ app = FastAPI(
     dependencies=[],
 )
 
+# OpenTelemetry auto-instrumentation for the builder surface. No-ops if
+# OTEL_SDK_DISABLED=true or no Collector is running (see observability.py).
+try:
+    from aipacken.observability import init_tracing, instrument_fastapi_app
+
+    init_tracing(service_name="aipacken-builder")
+    instrument_fastapi_app(app)
+except Exception as exc:
+    logger.warning("builder.otel.init_failed", error=str(exc))
+
 _docker_client: docker.DockerClient | None = None
 
 
