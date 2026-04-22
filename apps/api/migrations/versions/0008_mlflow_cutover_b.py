@@ -30,6 +30,8 @@ the old data must restore from backup (``make backup`` snapshot).
 
 from __future__ import annotations
 
+import os
+
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
@@ -39,14 +41,50 @@ down_revision = "0007_mlflow_a"
 branch_labels = None
 depends_on = None
 
+# Safety rails around the destructive DELETEs below. These numbers are
+# deliberately low — a prod install is expected to always be empty here
+# because Batch 35b landed immediately after 0007. If you're applying
+# this against a populated DB, set ``AIPACKEN_ALLOW_DESTRUCTIVE_MIGRATION=1``
+# AND take a backup first. See docs/runbooks/MIGRATION-0008.md if present.
+_MAX_DELETEROWS_WITHOUT_OPT_IN = 0
 
-def upgrade() -> None:
-    # Deployments: drop the FK into ModelVersion, replace with Run FK +
-    # snapshot fields. No data is preserved — pre-cutover deployments
-    # can be recreated from the UI once MLflow is the source of truth.
+
+def _row_count(conn, table: str) -> int:
+    return int(conn.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0)
+
+
+def _run_destructive_deletes() -> None:
+    """Delete predictions / deployments / model_packages, with guards.
+
+    This migration is forward-only and the snapshot-column refactor
+    can't carry the old rows across — but silently destroying audit
+    data (``predictions.input_preview_json`` is PII under
+    ``audit_payloads=True``) is an operations footgun. Require explicit
+    opt-in via env when the DB is non-empty; fail-loud otherwise.
+    """
+    conn = op.get_bind()
+    counts = {t: _row_count(conn, t) for t in ("predictions", "deployments", "model_packages")}
+    total = sum(counts.values())
+    opt_in = os.environ.get("AIPACKEN_ALLOW_DESTRUCTIVE_MIGRATION", "").strip() == "1"
+
+    if total > _MAX_DELETEROWS_WITHOUT_OPT_IN and not opt_in:
+        raise RuntimeError(
+            "0008_mlflow_b would DELETE rows from predictions / deployments / "
+            f"model_packages (counts={counts}). Refusing without "
+            "AIPACKEN_ALLOW_DESTRUCTIVE_MIGRATION=1. Take a backup first "
+            "(see scripts/backup.sh), then retry with the env var set."
+        )
+    print(f"[0008_mlflow_b] deleting rows: {counts} (opt_in={opt_in})")
     op.execute("DELETE FROM predictions")
     op.execute("DELETE FROM deployments")
     op.execute("DELETE FROM model_packages")
+
+
+def upgrade() -> None:
+    # Deployments: drop the FK into ModelVersion, replace with Run FK +
+    # snapshot fields. Pre-cutover rows are destroyed because the
+    # snapshot columns can't be populated backwards; see runbook.
+    _run_destructive_deletes()
 
     op.drop_index("ix_deployments_model_version_id", table_name="deployments")
     op.drop_column("deployments", "model_version_id")

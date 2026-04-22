@@ -260,7 +260,6 @@ export interface ModelVersionRead {
   registered_model_name: string;
   version: number;
   run_id: string;
-  mlflow_run_id: string;
   stage: string;
   aliases: string[];
   model_kind: string;
@@ -292,7 +291,6 @@ export interface ModelPackageRead {
   run_id: string;
   registered_model_name: string | null;
   version_number: number | null;
-  mlflow_run_id: string | null;
   model_kind: string;
   status: ModelPackageStatus;
   storage_path: string | null;
@@ -307,7 +305,6 @@ export interface DeploymentRead {
   name: string;
   slug: string;
   run_id: string;
-  mlflow_run_id: string | null;
   registered_model_name: string | null;
   version_number: number | null;
   model_kind: string;

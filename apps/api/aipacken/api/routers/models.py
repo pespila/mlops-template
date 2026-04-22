@@ -113,7 +113,6 @@ async def _enrich_mlflow_version(db: AsyncSession, mv, registered_name: str) -> 
         stage=_alias_to_stage(aliases),
         aliases=aliases,
         run_id=platform_run_id,
-        mlflow_run_id=getattr(mv, "run_id", "") or "",
         model_kind=model_kind,
         storage_path=None,
         input_schema_json={},
@@ -151,17 +150,36 @@ async def _user_experiment_ids(db: AsyncSession, user: User) -> set[str]:
     return set(rows)
 
 
+def _rm_visible_to_user(rm, user: User, owner_exp_ids: set[str]) -> bool:
+    """True iff at least one of ``rm``'s versions was produced by *user*.
+
+    Admins bypass. The registered-model *name* leaks a truncated run
+    UUID (``{catalog}-run-{8hex}`` — see train_run.py), so we must NOT
+    project every name to every tenant. Walks search_model_versions
+    for each rm, checks the platform.experiment_id tag.
+    """
+    if user.role == "admin":
+        return True
+    for mv in mlflow_client.search_model_versions(rm.name):
+        tags = dict(getattr(mv, "tags", None) or {})
+        if tags.get("platform.experiment_id", "") in owner_exp_ids:
+            return True
+    return False
+
+
 @router.get("", response_model=RegisteredModelList)
 async def list_models(
     pagination: Pagination = Depends(pagination_params),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RegisteredModelList:
+    owner_exps = await _user_experiment_ids(db, user)
     all_rms = mlflow_client.list_registered_models()
+    visible = [rm for rm in all_rms if _rm_visible_to_user(rm, user, owner_exps)]
     # Sort for stable pagination (MLflow returns no deterministic order).
-    all_rms.sort(key=lambda r: r.name)
-    total = len(all_rms)
-    page = all_rms[pagination.offset : pagination.offset + pagination.limit]
+    visible.sort(key=lambda r: r.name)
+    total = len(visible)
+    page = visible[pagination.offset : pagination.offset + pagination.limit]
     return RegisteredModelList(items=[_registered_model_to_read(r) for r in page], total=total)
 
 
@@ -180,6 +198,10 @@ async def get_model(
     owner_exps = await _user_experiment_ids(db, user)
     mvs = mlflow_client.search_model_versions(model_id)
     visible = [mv for mv in mvs if _user_owns_version(mv, user, owner_exps)]
+    # If the caller owns no versions under this model, return 404 — never
+    # leak name / description / timestamps of another tenant's model.
+    if not visible and user.role != "admin":
+        raise HTTPException(status_code=404, detail="model_not_found")
     versions = [await _enrich_mlflow_version(db, mv, model_id) for mv in visible]
 
     base = _registered_model_to_read(rm)
@@ -217,6 +239,15 @@ async def update_model(
     current_name = model_id
     if payload.name is not None and payload.name.strip() and payload.name.strip() != current_name:
         new_name = payload.name.strip()
+        # Reject names that would break MLflow's filter-string parser
+        # (``'``, backslash, newlines, control chars, backticks, semicolons).
+        # Defense in depth on top of _assert_safe_model_name in the client.
+        try:
+            mlflow_client._assert_safe_model_name(new_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"invalid_model_name:{exc}") from exc
+        if len(new_name) > 255:
+            raise HTTPException(status_code=422, detail="name_too_long")
         try:
             client.rename_registered_model(name=current_name, new_name=new_name)
         except Exception as exc:

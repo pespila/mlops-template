@@ -11,7 +11,7 @@ so the two workloads contend for resources independently:
   retries.
 
 * SlowWorkerSettings handles minutes-to-hours ML workloads:
-  train_run, analyze_run, build_package.
+  train_run, build_package.
   Lower concurrency (2) to respect per-job memory budgets, full
   training-job-timeout ceiling.
 
@@ -41,7 +41,6 @@ from aipacken.config import get_settings
 from aipacken.db import SessionLocal
 from aipacken.jobs.queues import FAST_QUEUE, QUEUE_FOR_FUNCTION, SLOW_QUEUE
 from aipacken.jobs.tasks import (
-    analyze_run,
     build_package,
     cleanup,
     deploy_model,
@@ -106,7 +105,6 @@ _FAST_FUNCTIONS = [
 # Slow queue — ML workloads that can run for minutes to hours.
 _SLOW_FUNCTIONS = [
     func(train_run.train_run, timeout=_TRAIN_TIMEOUT, max_tries=2),
-    func(analyze_run.analyze_run, timeout=1800, max_tries=2),
     func(build_package.build_package, timeout=1800, max_tries=2),
 ]
 
@@ -139,9 +137,9 @@ class SlowWorkerSettings:
 
 
 # Backward-compat: dev / single-worker setups run this and get all
-# functions on the FAST_QUEUE (enqueue() routes train_run / analyze_run
-# / build_package onto SLOW_QUEUE, so a single-worker WorkerSettings will
-# not pick those up — production must run the split pair).
+# functions on the FAST_QUEUE (enqueue() routes train_run / build_package
+# onto SLOW_QUEUE, so a single-worker WorkerSettings will not pick those
+# up — production must run the split pair).
 class WorkerSettings(FastWorkerSettings):
     functions = _FAST_FUNCTIONS + _SLOW_FUNCTIONS
     queue_name = FAST_QUEUE

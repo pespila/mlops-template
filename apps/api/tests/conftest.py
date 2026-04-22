@@ -83,6 +83,16 @@ async def client(
     for _mod in (_rd_datasets, _rd_deployments, _rd_packages, _rd_runs):
         monkeypatch.setattr(_mod, "enqueue", _enqueue_stub)
 
+    # Rate limiter's dependency was baked at router import time; the
+    # cleanest stub is the Redis handle it calls — swap for an
+    # AsyncMock that reports count=1 on every hit so no limit trips.
+    from aipacken.api import ratelimit as _rl
+
+    _fake_redis = AsyncMock()
+    _fake_redis.incr = AsyncMock(return_value=1)
+    _fake_redis.expire = AsyncMock(return_value=True)
+    monkeypatch.setattr(_rl, "get_redis", lambda: _fake_redis)
+
     from aipacken.main import create_app, lifespan
 
     app = create_app()
@@ -102,6 +112,44 @@ async def admin_login(client: AsyncClient) -> AsyncClient:
     r = await client.post(
         "/api/auth/login",
         json={"email": "admin@local", "password": "change-me"},
+    )
+    assert r.status_code == 200, r.text
+    return client
+
+
+@pytest_asyncio.fixture
+async def member_user(session_factory: Any) -> dict[str, str]:
+    """Create a second (non-admin) user directly in the test DB.
+
+    Yields a dict with ``email`` and ``password`` so tests can log in
+    as a tenant-scoped member and assert the authz chain returns 404
+    (never 200, never 403) for cross-user resource probes.
+    """
+    from aipacken.db.models import User
+    from aipacken.services.auth import hash_password
+
+    email = "member@local"
+    password = "member-secret"
+    async with session_factory() as session:
+        u = User(
+            email=email,
+            password_hash=hash_password(password),
+            role="member",
+            full_name="Test Member",
+        )
+        session.add(u)
+        await session.commit()
+        await session.refresh(u)
+        user_id = u.id
+    return {"email": email, "password": password, "id": user_id}
+
+
+@pytest_asyncio.fixture
+async def member_client(client: AsyncClient, member_user: dict[str, str]) -> AsyncClient:
+    """An authenticated AsyncClient for the member fixture above."""
+    r = await client.post(
+        "/api/auth/login",
+        json={"email": member_user["email"], "password": member_user["password"]},
     )
     assert r.status_code == 200, r.text
     return client

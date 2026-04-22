@@ -19,9 +19,12 @@ import os
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from aipacken import storage
 from aipacken.config import get_settings
@@ -34,14 +37,13 @@ from aipacken.db.models import (
     TransformConfig,
 )
 from aipacken.docker_client.builder_client import get_builder_client
-from aipacken.jobs.queue import enqueue
 from aipacken.services import mlflow_client
 from aipacken.services.redis_client import publish
 
 logger = structlog.get_logger(__name__)
 
 
-async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
+async def cascade_delete_run_assets(db: AsyncSession, run_id: str) -> None:
     """Remove a Run + its on-disk data + its MLflow run / registered model versions.
 
     Telemetry (metrics / artifacts / explanations / bias reports) lives in
@@ -106,7 +108,9 @@ async def cascade_delete_run_assets(db: Any, run_id: str) -> None:
         shutil.rmtree(run_root, ignore_errors=True)
 
 
-async def _mark_run_failed(session_factory: Any, run_id: str, error: str) -> None:
+async def _mark_run_failed(
+    session_factory: async_sessionmaker[AsyncSession], run_id: str, error: str
+) -> None:
     """Best-effort safety net — never leave a Run stuck in queued/running."""
     try:
         async with session_factory() as db:
@@ -446,14 +450,15 @@ async def _train_run_inner(ctx: dict[str, Any], run_id: str) -> dict[str, Any]:
                     except Exception as exc:
                         logger.info("train_run.run_tag_failed", run_id=run_id, error=str(exc))
 
-                    # Copy the input_schema.json into the Deployment-owned
-                    # snapshot location at deploy time, not here — it stays
-                    # in the MLflow artifact store until a Deployment pulls it.
-                    _ = json  # json import retained below for other writes
+                    # input_schema.json stays in the MLflow artifact store
+                    # until a Deployment pulls it down (see deploy_model).
         except Exception as exc:
             logger.warning("train_run.model_register_failed", error=str(exc))
 
-    await enqueue("analyze_run", run_id)
+    # analyze_run used to run a no-op shim after training success. Removed:
+    # the trainer's mlflow_sink uploads shap/bias JSON + PNGs directly, and
+    # the post-hoc job could only regress run status (failed→succeeded
+    # double-set, or succeeded→failed if the no-op import threw).
     return {
         "status": "succeeded",
         "run_id": run_id,

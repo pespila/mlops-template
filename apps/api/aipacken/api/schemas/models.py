@@ -33,7 +33,8 @@ class ModelVersionRead(BaseModel):
     stage: str
     aliases: list[str] = []
     run_id: str  # platform (DB) run id, read from the MLflow tag
-    mlflow_run_id: str
+    # mlflow_run_id kept off the read schema — used internally by the
+    # worker / registry resolution but not surfaced to API consumers.
     model_kind: str
     storage_path: str | None = None
     input_schema_json: dict[str, Any] = {}

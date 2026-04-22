@@ -344,9 +344,9 @@ services:
           cpus: "1"
           memory: 1G
 
-  # One-shot init: create every S3_BUCKET_* bucket so downstream writers
-  # (MLflow for artifacts, trainer for datasets/reports/predictions) do
-  # not 404 on first use. Runs after MinIO is healthy, exits.
+  # One-shot init: create the MLflow bucket so the tracking server
+  # does not 404 on first artifact upload. Runs after MinIO is healthy,
+  # exits. Only one bucket is needed — MLflow is the sole writer now.
   minio-init:
     image: minio/mc:RELEASE.2024-10-08T09-37-26Z
     entrypoint:
@@ -358,20 +358,14 @@ services:
           echo "[minio-init] waiting for minio…"
           sleep 2
         done
-        for bucket in "$$S3_BUCKET_MLFLOW" "$$S3_BUCKET_DATASETS" "$$S3_BUCKET_ARTIFACTS" "$$S3_BUCKET_REPORTS" "$$S3_BUCKET_PREDICTIONS"; do
-          if [ -n "$$bucket" ]; then
-            mc mb --ignore-existing "local/$$bucket"
-            echo "[minio-init] bucket $$bucket ready"
-          fi
-        done
+        if [ -n "$$S3_BUCKET_MLFLOW" ]; then
+          mc mb --ignore-existing "local/$$S3_BUCKET_MLFLOW"
+          echo "[minio-init] bucket $$S3_BUCKET_MLFLOW ready"
+        fi
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       S3_BUCKET_MLFLOW: ${S3_BUCKET_MLFLOW}
-      S3_BUCKET_DATASETS: ${S3_BUCKET_DATASETS}
-      S3_BUCKET_ARTIFACTS: ${S3_BUCKET_ARTIFACTS}
-      S3_BUCKET_REPORTS: ${S3_BUCKET_REPORTS}
-      S3_BUCKET_PREDICTIONS: ${S3_BUCKET_PREDICTIONS}
     depends_on:
       minio:
         condition: service_healthy

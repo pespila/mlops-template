@@ -20,8 +20,11 @@ Design
   MLflow is unreachable or the run/experiment is missing. Routers
   convert that into the right HTTP status.
 
-Writers (create experiment, start run) stay in the router + worker for
-Batches 32-34; Batch 35 flips the last direct DB writes.
+Writers (create experiment / run, create model versions, set aliases)
+land here too post-cutover: train_run.py calls into this module when
+it registers a new MLflow ModelVersion on training success, and the
+``/api/models/{id}/versions/{vid}/promote`` endpoint writes aliases
+through :func:`set_alias`.
 """
 
 from __future__ import annotations
@@ -347,7 +350,18 @@ def download_run_artifacts(
     Used by deploy_model / build_package to stage the trained model on
     ``/var/platform-data`` before handing it to the serving container.
     Returns the local path MLflow wrote to, or None on failure.
+
+    Path-traversal defence: MLflow's HTTP / proxied-artifact repository
+    joins ``artifact_path`` segments without strict sanitization on
+    older versions (CVE-2023-1177 class). After the download, we walk
+    the result tree and reject any file that doesn't resolve under
+    ``dst_dir`` — a malicious trainer that logged an artifact named
+    ``../../etc/…`` would otherwise drop files outside the deployment's
+    staging area (the pickle signature gates load, not cross-drop).
     """
+    import shutil as _shutil
+    from pathlib import Path as _Path
+
     client = get_client()
     if client is None:
         return None
@@ -357,7 +371,7 @@ def download_run_artifacts(
     try:
         import mlflow  # type: ignore[import-not-found]
 
-        return mlflow.artifacts.download_artifacts(
+        local = mlflow.artifacts.download_artifacts(
             run_id=run.info.run_id,
             artifact_path=artifact_path,
             dst_path=dst_dir,
@@ -369,6 +383,43 @@ def download_run_artifacts(
             exc,
         )
         return None
+
+    dst_real = _Path(dst_dir).resolve()
+    try:
+        local_real = _Path(local).resolve()
+        if not _path_is_under(local_real, dst_real):
+            raise RuntimeError(f"artifact landed outside dst_dir: {local_real}")
+        # Walk the tree — symlinks + nested entries both — and assert
+        # every path resolves back under dst_dir.
+        if local_real.is_dir():
+            for child in local_real.rglob("*"):
+                if not _path_is_under(child.resolve(), dst_real):
+                    raise RuntimeError(f"traversal: {child} escapes {dst_real}")
+    except Exception as exc:
+        logger.warning(
+            "mlflow.download_artifacts_traversal_rejected platform_run_id=%s error=%s",
+            platform_run_id,
+            exc,
+        )
+        try:
+            _shutil.rmtree(local, ignore_errors=True)
+        except OSError as cleanup_exc:
+            logger.info("mlflow.download_cleanup_failed error=%s", cleanup_exc)
+        return None
+    return local
+
+
+def _path_is_under(candidate, root) -> bool:
+    """True iff *candidate* is *root* itself or a descendant of it."""
+    from pathlib import Path as _Path
+
+    c = _Path(candidate).resolve()
+    r = _Path(root).resolve()
+    try:
+        c.relative_to(r)
+        return True
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -472,10 +523,38 @@ def get_registered_model(name: str) -> Any | None:
         return None
 
 
+_REGISTERED_MODEL_NAME_BAD_CHARS = frozenset("'\"\\\n\r\x00`;")
+
+
+def _assert_safe_model_name(name: str) -> None:
+    """Reject registered-model names that would break the MLflow filter.
+
+    MLflow's filter-string parser treats ``'`` and backslash as quote
+    delimiters; a name containing either breaks the ``name='<name>'``
+    filter and can broaden the match ("filter-string injection"). The
+    trainer only ever mints names of the shape ``{catalog}-run-{8hex}``
+    so the real attack surface is the admin rename endpoint. We also
+    reject control characters and semicolons out of caution.
+    """
+    if not name or any(ch in _REGISTERED_MODEL_NAME_BAD_CHARS for ch in name):
+        raise ValueError(f"unsafe registered-model name: {name!r}")
+
+
 def search_model_versions(name: str) -> list[Any]:
-    """All MLflow ModelVersions belonging to ``name``, newest first."""
+    """All MLflow ModelVersions belonging to ``name``, newest first.
+
+    The name is validated and single-quote-escaped before being
+    interpolated into the filter string — MLflow's filter parser is
+    not SQL but ``name='<name>'`` still lets a stray ``'`` broaden
+    the match. See _assert_safe_model_name above.
+    """
     client = get_client()
     if client is None:
+        return []
+    try:
+        _assert_safe_model_name(name)
+    except ValueError as exc:
+        logger.warning("mlflow.search_model_versions_rejected error=%s", exc)
         return []
     try:
         rows = client.search_model_versions(f"name='{name}'")

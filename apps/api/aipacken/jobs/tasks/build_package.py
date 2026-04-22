@@ -471,6 +471,12 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("build_package.hyperparams_parse_failed", error=str(exc))
 
+        # Single canonical version_id used by BOTH the README and the
+        # Dockerfile. A prior template-interpolation mismatch (``{n}:{v}``
+        # vs ``{n}-v{v}``) produced exported packages whose README snippets
+        # and Dockerfile-built image disagreed on the model path.
+        version_id = f"{_slugify(model_name)}-v{version_number}"
+
         readme = _README_TEMPLATE.format(
             model_name=model_name,
             exported_at_utc=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
@@ -478,7 +484,7 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
             task=task_label,
             model_kind=model_kind,
             version=version_number,
-            version_id=f"{model_name}:{version_number}",
+            version_id=version_id,
             run_id=run_id,
             slug=_slugify(model_name),
             serving_image=serving_image,
@@ -490,7 +496,7 @@ async def build_package(ctx: dict[str, Any], package_id: str) -> dict[str, Any]:
         (scratch / "Dockerfile").write_text(
             _DOCKERFILE_TEMPLATE.format(
                 serving_image=serving_image,
-                version_id=f"{model_name}-v{version_number}",
+                version_id=version_id,
                 model_kind=model_kind,
             )
         )

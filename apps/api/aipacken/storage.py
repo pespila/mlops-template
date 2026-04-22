@@ -1,9 +1,18 @@
 """Filesystem layout helpers for the platform-data volume.
 
-Every path the backend, worker, trainer, or serving container produces lives
-under `settings.data_root` (default `/var/platform-data`) and is reachable
-through these helpers. No S3, no presigned URLs, no tracking server in the
-loop.
+The named ``platform-data`` volume carries:
+
+  * ``datasets/{id}/``        — uploaded CSV/Parquet + profile JSON.
+  * ``runs/{run_id}/``        — trainer scratch dirs (logs, local
+                                artifact staging before MLflow upload).
+  * ``deployments/{dep_id}/`` — artifacts staged from MLflow at deploy
+                                time so the serving container loads
+                                locally without speaking to MLflow.
+  * ``packages/{pkg_id}*``    — build scratch + final tar.gz.
+
+Heavy artifacts (``model.pkl``, SHAP/bias reports, metrics.jsonl) are
+owned by MLflow and live in MinIO under the ``mlflow-artifacts``
+bucket — fetched via the tracking server, not written here.
 """
 
 from __future__ import annotations

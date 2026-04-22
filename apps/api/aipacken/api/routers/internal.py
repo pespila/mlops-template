@@ -8,20 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aipacken.api.schemas.predictions import PredictionBulkIngest
 from aipacken.config import get_settings
 from aipacken.db import get_db
-from aipacken.db.models import Prediction
+from aipacken.db.models import Prediction, User
+from aipacken.services.auth import require_admin
 from aipacken.services.mlflow_client import get_client, mlflow_enabled
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 
 @router.get("/mlflow/diagnostics")
-async def mlflow_diagnostics() -> dict[str, object]:
+async def mlflow_diagnostics(
+    user: User = Depends(require_admin),
+) -> dict[str, object]:
     """Connectivity + configuration report for the MLflow tracking server.
 
-    Unauthenticated on purpose — it emits no tenant data, only boolean /
-    config-shape responses. Useful when standing up a fresh install or
-    debugging 'my tracking URI is off' issues without shelling into the
-    api container.
+    Admin-gated: the previous "unauthenticated on purpose" design
+    returned the tracking URI and reachability status to any network
+    peer, which paired with the per-run diag endpoint below to leak
+    tenant identifiers across tenants. The URI is still a deployment
+    secret in locked-down configurations, so gate to admin.
     """
     settings = get_settings()
     body: dict[str, object] = {
@@ -45,7 +49,10 @@ async def mlflow_diagnostics() -> dict[str, object]:
 
 
 @router.get("/mlflow/diag/{platform_run_id}")
-async def mlflow_run_diag(platform_run_id: str) -> dict[str, object]:
+async def mlflow_run_diag(
+    platform_run_id: str,
+    user: User = Depends(require_admin),
+) -> dict[str, object]:
     """Per-run read-path trace — what the api actually sees for one run.
 
     When the UI shows empty Artifacts / Metrics / Model panels for a run
@@ -55,9 +62,10 @@ async def mlflow_run_diag(platform_run_id: str) -> dict[str, object]:
     endpoint walks the chain and returns each step's output so we can
     pinpoint the failure in under a minute without shelling in.
 
-    Unauthenticated for the same reason as ``/mlflow/diagnostics`` —
-    self-hosted dev install, no tenant data emitted beyond what the
-    authenticated user already has access to via the normal api.
+    Admin-gated. The response includes every platform.* tag on the
+    MLflow run (user_id, experiment_id, dataset_id, …) plus the full
+    bias.json and selected_hyperparams.json, which is legitimately
+    useful for debugging but must not be readable cross-tenant.
     """
     from aipacken.services import mlflow_client as svc
 

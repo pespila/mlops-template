@@ -6,8 +6,21 @@ services:
     environment:
       PLATFORM_ENV: dev
 
-  worker:
-    command: ["watchfiles", "--filter", "python", "arq aipacken.jobs.worker.WorkerSettings", "/app/aipacken"]
+  # Base compose splits the worker pool into fast/slow queues
+  # (see jobs/worker.py). Both services need the hot-reload override
+  # and the bind-mount — a single `worker:` override targeted the
+  # legacy WorkerSettings class and silently created an orphan
+  # container that was not defined in the base stack, so ML jobs
+  # enqueued to SLOW_QUEUE never ran under `make dev`.
+  worker-fast:
+    command: ["watchfiles", "--filter", "python", "arq aipacken.jobs.worker.FastWorkerSettings", "/app/aipacken"]
+    volumes:
+      - ../../apps/api:/app
+    environment:
+      PLATFORM_ENV: dev
+
+  worker-slow:
+    command: ["watchfiles", "--filter", "python", "arq aipacken.jobs.worker.SlowWorkerSettings", "/app/aipacken"]
     volumes:
       - ../../apps/api:/app
     environment:

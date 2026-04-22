@@ -234,7 +234,6 @@ def run_hpo(
 
     best_trial = study.best_trial
     best_estimator = best_trial.user_attrs.get("estimator")
-    best_effective = best_trial.user_attrs.get("effective") or best_trial.params
 
     # Re-score the best estimator over the full metric set so the run's
     # metrics panel doesn't show only the single optimized metric.

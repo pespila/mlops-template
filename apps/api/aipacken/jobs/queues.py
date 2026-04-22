@@ -24,6 +24,5 @@ QUEUE_FOR_FUNCTION: dict[str, str] = {
     "teardown_deployment": FAST_QUEUE,
     "cleanup": FAST_QUEUE,
     "train_run": SLOW_QUEUE,
-    "analyze_run": SLOW_QUEUE,
     "build_package": SLOW_QUEUE,
 }

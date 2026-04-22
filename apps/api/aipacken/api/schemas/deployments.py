@@ -35,7 +35,9 @@ class DeploymentRead(BaseModel):
 
     id: str
     run_id: str
-    mlflow_run_id: str | None = None
+    # mlflow_run_id stays on the DB column for worker lookups but is
+    # NOT serialized — the UI has no use for it and exposing it leaks
+    # the MLflow-side run identifier to clients.
     registered_model_name: str | None = None
     version_number: int | None = None
     model_kind: str = "sklearn"
