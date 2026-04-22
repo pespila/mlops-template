@@ -86,11 +86,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Creates the `mlflow` database on fresh pgdata. Idempotent: if
-      # pgdata already exists the script is never re-run (docker
-      # entrypoint convention). For an existing install, create the
-      # mlflow DB manually — see the script header.
-      - ../postgres/init-mlflow-db.sh:/docker-entrypoint-initdb.d/10-mlflow.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -384,28 +379,62 @@ services:
       - platform-net
     restart: "no"
 
-  # MLflow Tracking Server. Backend store = the Postgres `mlflow` DB
-  # (created by infra/postgres/init-mlflow-db.sh on fresh pgdata).
-  # Artifact store = s3://${MLFLOW_ARTIFACT_BUCKET} on the MinIO above.
-  # Exposed only on platform-net — no Traefik route. The api + worker
-  # + trainer reach it by DNS name; the SPA never talks to it directly.
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.17.2
-    # Install boto3 + psycopg2-binary at container start so the MLflow
-    # server can talk to both S3/MinIO and Postgres. Pinning here keeps
-    # the compose file self-contained — no separate custom Dockerfile
-    # needed until we start extending MLflow itself.
+  # One-shot: ensure the MLflow backend-store database exists. Runs on
+  # every `compose up` but is idempotent via SELECT … WHERE NOT EXISTS,
+  # so it's safe to re-run on an existing install where the on-disk
+  # init-script in infra/postgres/ already ran at pgdata creation time
+  # (or never, because pgdata predates Batch 32).
+  mlflow-db-init:
+    image: postgres:16-alpine
     entrypoint:
       - sh
       - -c
       - |
-        pip install --quiet --no-cache-dir boto3==1.35.79 psycopg2-binary==2.9.10 && \
-        exec mlflow server \
-          --host 0.0.0.0 --port 5000 \
-          --backend-store-uri "postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_MLFLOW_DB}" \
-          --artifacts-destination "s3://$${S3_BUCKET_MLFLOW}" \
-          --serve-artifacts \
-          --default-artifact-root "s3://$${S3_BUCKET_MLFLOW}"
+        set -e
+        until pg_isready -h postgres -U "$$POSTGRES_USER" -d postgres >/dev/null 2>&1; do
+          echo "[mlflow-db-init] waiting for postgres…"
+          sleep 2
+        done
+        PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U "$$POSTGRES_USER" -d postgres \
+          -tc "SELECT 1 FROM pg_database WHERE datname = '$$POSTGRES_MLFLOW_DB'" | grep -q 1 \
+          || PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U "$$POSTGRES_USER" -d postgres \
+               -c "CREATE DATABASE \"$$POSTGRES_MLFLOW_DB\" OWNER \"$$POSTGRES_USER\";"
+        echo "[mlflow-db-init] database $$POSTGRES_MLFLOW_DB ready"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_MLFLOW_DB: ${POSTGRES_MLFLOW_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - platform-net
+    restart: "no"
+
+  # MLflow Tracking Server. Backend store = the Postgres `mlflow` DB
+  # (ensured by mlflow-db-init above). Artifact store = s3://${S3_BUCKET_MLFLOW}
+  # on the MinIO above. Exposed only on platform-net — no Traefik
+  # route. The api + worker + trainer reach it by DNS name; the SPA
+  # never talks to it directly.
+  mlflow:
+    build:
+      context: ../mlflow
+      dockerfile: Dockerfile
+    image: platform/mlflow:latest
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_MLFLOW_DB}"
+      - --artifacts-destination
+      - "s3://${S3_BUCKET_MLFLOW}"
+      - --default-artifact-root
+      - "s3://${S3_BUCKET_MLFLOW}"
+      - --serve-artifacts
     env_file:
       - ../../.env
     environment:
@@ -423,6 +452,8 @@ services:
       postgres:
         condition: service_healthy
       minio-init:
+        condition: service_completed_successfully
+      mlflow-db-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/health',timeout=2).status==200 else 1)\""]
