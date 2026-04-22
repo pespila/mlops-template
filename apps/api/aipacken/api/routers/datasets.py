@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func, select
@@ -24,6 +25,17 @@ from aipacken.services.auth import get_current_user
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
+# Extension allow-list. Anything else (e.g. `.pkl`, `.exe`, `.sh`) gets
+# rejected at upload time — we never need to interpret those as datasets,
+# and letting the user write arbitrary extensions onto the platform-data
+# volume under their dataset directory is an unnecessary pivot surface.
+_ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
+    {".csv", ".tsv", ".parquet", ".json", ".jsonl", ".xlsx", ".xls"}
+)
+# 2 GB hard cap on a single upload. Larger datasets belong in object storage,
+# not on the shared volume. Keeps a malicious client from filling the disk.
+_MAX_UPLOAD_BYTES: int = 2 * 1024 * 1024 * 1024
+
 
 @router.post("", response_model=DatasetRead, status_code=201)
 async def create_dataset(
@@ -32,9 +44,34 @@ async def create_dataset(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dataset:
+    # Sanitize the user-supplied filename. The original ends up in
+    # `source_filename` for UX ("you uploaded iris.csv"), but what we
+    # actually write to disk is UUID-derived so an attacker cannot smuggle
+    # `../../runs/<known>/artifacts/model.pkl` into storage.dataset_raw_path
+    # via file.filename (security.md P1 "Path traversal on upload").
     dataset_id = str(uuid.uuid4())
-    filename = file.filename or dataset_id
-    dest = storage.dataset_raw_path(dataset_id, filename)
+    original_name = file.filename or f"{dataset_id}.csv"
+    # Strip any directory components the client may have included.
+    original_basename = Path(original_name).name
+    ext = Path(original_basename).suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unsupported_file_type",
+                "extension": ext or "<none>",
+                "allowed": sorted(_ALLOWED_EXTENSIONS),
+            },
+        )
+
+    safe_basename = f"{dataset_id}{ext}"
+    dest = storage.dataset_raw_path(dataset_id, safe_basename)
+    # Defence in depth: confirm `dest` resolves inside the dataset's own
+    # subtree before writing. A storage.py bug or symlink shouldn't allow
+    # writes outside the per-dataset dir.
+    dataset_root = storage.dataset_raw_dir(dataset_id).resolve()
+    if not dest.resolve().is_relative_to(dataset_root):
+        raise HTTPException(status_code=400, detail="invalid_destination_path")
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     h = hashlib.sha256()
@@ -44,17 +81,26 @@ async def create_dataset(
             chunk = await file.read(1024 * 1024)
             if not chunk:
                 break
+            size += len(chunk)
+            if size > _MAX_UPLOAD_BYTES:
+                # Truncate what we wrote so we don't leave a huge
+                # half-file on the volume, then reject.
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail={"error": "upload_too_large", "max_bytes": _MAX_UPLOAD_BYTES},
+                )
             out.write(chunk)
             h.update(chunk)
-            size += len(chunk)
 
-    display_name = name or filename.rsplit(".", 1)[0]
+    display_name = name or Path(original_basename).stem
 
     dataset = Dataset(
         id=dataset_id,
         user_id=user.id,
         name=display_name,
-        source_filename=file.filename,
+        source_filename=original_basename,
         size_bytes=size,
         storage_path=storage.to_relative(dest),
         checksum=h.hexdigest(),
