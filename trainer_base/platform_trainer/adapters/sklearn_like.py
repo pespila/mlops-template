@@ -164,4 +164,19 @@ def prepare_hyperparams(name: str, hyperparams: dict[str, Any]) -> dict[str, Any
     return _prepare_hyperparams(name, hyperparams)
 
 
-__all__ = ["fit_estimator", "prepare_hyperparams"]
+def score_estimator(
+    *, task3: str, estimator: Any, X: np.ndarray, y: pd.Series
+) -> dict[str, float]:
+    """Score a fitted estimator on any (X, y) pair.
+
+    Used by ``__main__.py`` to compute held-out **test-set** metrics after
+    HPO has selected best-params on the validation set. Returns the same
+    metric dict shape as the internal _*_metrics helpers so callers can
+    prefix keys (e.g. ``test_accuracy``) before appending to MLflow.
+    """
+    if task3 == "regression":
+        return _regression_metrics(estimator, X, y)
+    return _classification_metrics(estimator, X, y)
+
+
+__all__ = ["fit_estimator", "prepare_hyperparams", "score_estimator"]

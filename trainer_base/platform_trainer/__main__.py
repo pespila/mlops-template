@@ -972,6 +972,43 @@ def main() -> int:
             joblib.dump(model, _mpath)
             sign_file(_mpath)
 
+        # Held-out test-set scoring. apply_split reserves a third fold
+        # (default 15%) that's never touched during HPO or final fit, so
+        # test_* metrics are an unbiased report card. Validation metrics
+        # are optimistic because HPO repeatedly scored against them.
+        _test_metrics: dict[str, float] = {}
+        try:
+            if name == "autogluon":
+                from platform_trainer.adapters import autogluon as _ag_mod
+
+                _test_df = X_test[feature_cols].copy()
+                _test_df[target] = y_test.values
+                _test_metrics = _ag_mod.score_predictor(
+                    predictor=model, df=_test_df, target=target, task=task
+                )
+            else:
+                _X_test_np = preprocessor.transform(X_test)
+                if name.startswith("sklearn_"):
+                    _test_metrics = adapter.score_estimator(
+                        task3=task3,
+                        estimator=estimator,
+                        X=_X_test_np,
+                        y=y_test,
+                    )
+                else:
+                    _test_metrics = adapter.score_estimator(
+                        task3=task3,
+                        estimator=estimator,
+                        X=_X_test_np,
+                        y=y_test,
+                        label_encoder=label_encoder,
+                    )
+        except Exception as _exc:  # noqa: BLE001 — test scoring is best-effort
+            logger.warning("test_metrics.failed", extra={"error": str(_exc)})
+        for _k, _v in _test_metrics.items():
+            if isinstance(_v, (int, float)):
+                metrics[f"test_{_k}"] = float(_v)
+
         for _metric_name, _metric_value in metrics.items():
             if isinstance(_metric_value, (int, float)):
                 _append_metric(metrics_path, _metric_name, _metric_value)

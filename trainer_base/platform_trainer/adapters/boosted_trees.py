@@ -151,4 +151,35 @@ def encode_labels(
     return _encode_labels(task3, y_train, y_val)
 
 
-__all__ = ["fit_estimator", "prepare_hyperparams", "encode_labels"]
+def score_estimator(
+    *,
+    task3: str,
+    estimator: Any,
+    X: np.ndarray,
+    y: pd.Series,
+    label_encoder: Any | None = None,
+) -> dict[str, float]:
+    """Score a fitted xgboost/lightgbm estimator on any (X, y) pair.
+
+    Handles the classification label-encoding mismatch: the estimator was
+    fit on integer-encoded labels, so if *y* is raw string labels and we
+    have the encoder from training, we transform it before scoring.
+    """
+    if task3 != "regression" and label_encoder is not None:
+        try:
+            y_enc = pd.Series(label_encoder.transform(y), index=y.index)
+        except Exception:
+            y_enc = y
+    else:
+        y_enc = y
+    if task3 == "regression":
+        return _regression_metrics(estimator, X, y_enc)
+    return _classification_metrics(estimator, X, y_enc)
+
+
+__all__ = [
+    "encode_labels",
+    "fit_estimator",
+    "prepare_hyperparams",
+    "score_estimator",
+]

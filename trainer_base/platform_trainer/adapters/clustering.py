@@ -131,16 +131,22 @@ def fit_estimator(
     y_val: Any,
     hyperparams: dict[str, Any],
 ) -> tuple[Any, dict[str, float], dict[str, Any]]:
-    """Fit a clusterer on concatenated train+val and return the fitted model.
+    """Fit a clusterer on training data and score on the validation matrix.
 
     ``task3`` is always ``"clustering"`` here but the parameter is kept for
     uniform signature with the supervised adapters. ``y_*`` arguments are
     ignored (clustering is unsupervised).
 
-    Inductive: fit on ``X_train``, score on ``X_val``. Returns bare estimator.
-    Transductive: fit on ``concat([X_train, X_val])`` (we need all data to
-    form cluster labels since there's no held-out inductive path), score on
-    the full fit matrix. Returns a :class:`TransductiveClusterer`.
+    Inductive (KMeans, GMM, MiniBatchKMeans): fit on ``X_train``, predict on
+    ``X_val``, score on the predictions. Returns the bare estimator.
+
+    Transductive (DBSCAN, Agglomerative): fit on ``X_train`` only, then
+    project ``X_val`` into cluster labels via 1-NN against the fit matrix
+    and score on that held-out assignment. Returns a
+    :class:`TransductiveClusterer`. Prior behavior fit on
+    ``concat([X_train, X_val])`` and scored on the same matrix — that
+    mixed in-sample structure into the "metric" and made transductive
+    silhouette/CH/DB not comparable to the inductive path.
     """
     dotted = task_class_map.get(task3) or task_class_map.get("clustering")
     if not dotted:
@@ -153,35 +159,30 @@ def fit_estimator(
 
     X_train_np = np.asarray(X_train)
     X_val_np = np.asarray(X_val) if X_val is not None else None
+    has_val = X_val_np is not None and len(X_val_np) > 0
 
     if name in _TRANSDUCTIVE:
-        # Transductive: fit once on all data we have; the wrapper answers
-        # future .predict calls by 1-NN against this matrix.
-        X_all = (
-            np.vstack([X_train_np, X_val_np])
-            if X_val_np is not None and len(X_val_np) > 0
-            else X_train_np
-        )
         base = cls(**effective)
         if hasattr(base, "fit_predict"):
-            labels = np.asarray(base.fit_predict(X_all))
+            train_labels = np.asarray(base.fit_predict(X_train_np))
         else:
-            base.fit(X_all)
-            labels = np.asarray(getattr(base, "labels_", None))
-            if labels is None:
+            base.fit(X_train_np)
+            train_labels = np.asarray(getattr(base, "labels_", None))
+            if train_labels is None:
                 raise RuntimeError(f"{name!r} produced no labels_ after fit")
-        metrics = _internal_metrics(X_all, labels)
         wrapper = TransductiveClusterer(
-            estimator=base, train_X=X_all, train_labels=labels
+            estimator=base, train_X=X_train_np, train_labels=train_labels
         )
+        if has_val:
+            val_labels = np.asarray(wrapper.predict(X_val_np))
+            metrics = _internal_metrics(X_val_np, val_labels)
+        else:
+            metrics = _internal_metrics(X_train_np, train_labels)
         return wrapper, metrics, effective
 
-    # Inductive path ----------------------------------------------------------
     estimator = cls(**effective)
     estimator.fit(X_train_np)
-    # Score on validation if we have it (gives an unbiased silhouette); fall
-    # back to training data when the caller didn't reserve a split.
-    if X_val_np is not None and len(X_val_np) > 0:
+    if has_val:
         preds = estimator.predict(X_val_np)
         metrics = _internal_metrics(X_val_np, np.asarray(preds))
     else:

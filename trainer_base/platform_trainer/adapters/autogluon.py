@@ -116,4 +116,18 @@ def fit(
     return predictor, metrics
 
 
-__all__ = ["fit"]
+def score_predictor(
+    *, predictor: Any, df: pd.DataFrame, target: str, task: str
+) -> dict[str, float]:
+    """Score a fitted TabularPredictor on any labeled DataFrame.
+
+    Used by ``__main__.py`` to compute held-out test-set metrics after
+    training is complete. Mirrors the ``classification`` / ``regression``
+    branches of :func:`fit` without the leaderboard bookkeeping.
+    """
+    if task == "classification":
+        return _classification_metrics(predictor, df, target)
+    return _regression_metrics(predictor, df, target)
+
+
+__all__ = ["fit", "score_predictor"]
