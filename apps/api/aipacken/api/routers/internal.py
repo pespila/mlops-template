@@ -102,7 +102,7 @@ async def mlflow_run_diag(platform_run_id: str) -> dict[str, object]:
         body["bias_json_error"] = str(exc)
     try:
         body["selected_hyperparams_json"] = svc.read_run_json(
-            platform_run_id, "selected_hyperparams.json"
+            platform_run_id, "artifacts/selected_hyperparams.json"
         )
     except Exception as exc:
         body["selected_hyperparams_error"] = str(exc)
