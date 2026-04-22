@@ -15,6 +15,7 @@ from aipacken.api.authz import (
     get_owned_transform_config,
     scope_run_by_user,
 )
+from aipacken.api.pagination import Pagination, pagination_params
 from aipacken.api.ratelimit import RUN_CREATE_LIMIT, rate_limit
 from aipacken.api.schemas.runs import (
     ArtifactRead,
@@ -134,6 +135,7 @@ async def create_run(
 
 @router.get("", response_model=RunList)
 async def list_runs(
+    pagination: Pagination = Depends(pagination_params),
     experiment_id: str | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -146,6 +148,7 @@ async def list_runs(
         await get_owned_experiment(db, experiment_id, user)
         stmt = stmt.where(Run.experiment_id == experiment_id)
         count_stmt = count_stmt.where(Run.experiment_id == experiment_id)
+    stmt = stmt.limit(pagination.limit).offset(pagination.offset)
     rows = (await db.execute(stmt)).scalars().all()
     total = (await db.execute(count_stmt)).scalar_one()
     return RunList(items=[RunRead.model_validate(r) for r in rows], total=total)

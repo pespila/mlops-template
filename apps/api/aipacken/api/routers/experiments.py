@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken.api.authz import get_owned_experiment, scope_by_user
+from aipacken.api.pagination import Pagination, pagination_params
 from aipacken.api.schemas.experiments import (
     ExperimentCreate,
     ExperimentList,
@@ -34,10 +35,15 @@ async def create_experiment(
 
 @router.get("", response_model=ExperimentList)
 async def list_experiments(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    pagination: Pagination = Depends(pagination_params),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> ExperimentList:
-    stmt = scope_by_user(select(Experiment), Experiment, user).order_by(
-        Experiment.created_at.desc()
+    stmt = (
+        scope_by_user(select(Experiment), Experiment, user)
+        .order_by(Experiment.created_at.desc())
+        .limit(pagination.limit)
+        .offset(pagination.offset)
     )
     count_stmt = scope_by_user(select(func.count()).select_from(Experiment), Experiment, user)
     rows = (await db.execute(stmt)).scalars().all()

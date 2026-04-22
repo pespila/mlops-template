@@ -16,6 +16,7 @@ from aipacken.api.authz import (
     get_owned_model_version,
     scope_deployment_by_user,
 )
+from aipacken.api.pagination import Pagination, pagination_params
 from aipacken.api.ratelimit import PREDICT_LIMIT, rate_limit
 from aipacken.api.schemas.deployments import (
     DeploymentCreate,
@@ -68,9 +69,16 @@ async def create_deployment(
 
 @router.get("", response_model=DeploymentList)
 async def list_deployments(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    pagination: Pagination = Depends(pagination_params),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> DeploymentList:
-    stmt = scope_deployment_by_user(select(Deployment), user).order_by(Deployment.created_at.desc())
+    stmt = (
+        scope_deployment_by_user(select(Deployment), user)
+        .order_by(Deployment.created_at.desc())
+        .limit(pagination.limit)
+        .offset(pagination.offset)
+    )
     count_stmt = scope_deployment_by_user(select(func.count(Deployment.id)), user)
     rows = (await db.execute(stmt)).scalars().all()
     total = (await db.execute(count_stmt)).scalar_one()

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
 from aipacken.api.authz import get_owned_dataset, scope_by_user
+from aipacken.api.pagination import Pagination, pagination_params
 from aipacken.api.ratelimit import UPLOAD_LIMIT, rate_limit
 from aipacken.api.schemas.datasets import (
     DatasetList,
@@ -122,9 +123,16 @@ async def create_dataset(
 
 @router.get("", response_model=DatasetList)
 async def list_datasets(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    pagination: Pagination = Depends(pagination_params),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> DatasetList:
-    stmt = scope_by_user(select(Dataset), Dataset, user).order_by(Dataset.created_at.desc())
+    stmt = (
+        scope_by_user(select(Dataset), Dataset, user)
+        .order_by(Dataset.created_at.desc())
+        .limit(pagination.limit)
+        .offset(pagination.offset)
+    )
     count_stmt = scope_by_user(select(func.count()).select_from(Dataset), Dataset, user)
     items = (await db.execute(stmt)).scalars().all()
     total = (await db.execute(count_stmt)).scalar_one()

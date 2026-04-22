@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
 from aipacken.api.authz import is_admin
+from aipacken.api.pagination import Pagination, pagination_params
 from aipacken.api.schemas.models import (
     ModelUpdate,
     ModelVersionRead,
@@ -55,10 +56,21 @@ async def _enrich_version(db: AsyncSession, v: ModelVersion) -> ModelVersionRead
 
 @router.get("", response_model=RegisteredModelList)
 async def list_models(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    pagination: Pagination = Depends(pagination_params),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> RegisteredModelList:
     rows = (
-        (await db.execute(select(RegisteredModel).order_by(RegisteredModel.name))).scalars().all()
+        (
+            await db.execute(
+                select(RegisteredModel)
+                .order_by(RegisteredModel.name)
+                .limit(pagination.limit)
+                .offset(pagination.offset)
+            )
+        )
+        .scalars()
+        .all()
     )
     total = (await db.execute(select(func.count()).select_from(RegisteredModel))).scalar_one()
     return RegisteredModelList(
