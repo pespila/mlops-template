@@ -16,6 +16,7 @@ from aipacken.api.authz import (
     get_owned_model_version,
     scope_deployment_by_user,
 )
+from aipacken.api.ratelimit import PREDICT_LIMIT, rate_limit
 from aipacken.api.schemas.deployments import (
     DeploymentCreate,
     DeploymentList,
@@ -225,7 +226,11 @@ async def get_deployment_logs(
     return out
 
 
-@router.post("/{deployment_id}/predict", response_model=PredictResponse)
+@router.post(
+    "/{deployment_id}/predict",
+    response_model=PredictResponse,
+    dependencies=[Depends(rate_limit(PREDICT_LIMIT))],
+)
 async def predict(
     deployment_id: str,
     payload: dict[str, Any],

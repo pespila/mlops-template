@@ -15,6 +15,7 @@ from aipacken.api.authz import (
     get_owned_transform_config,
     scope_run_by_user,
 )
+from aipacken.api.ratelimit import RUN_CREATE_LIMIT, rate_limit
 from aipacken.api.schemas.runs import (
     ArtifactRead,
     MetricRead,
@@ -41,7 +42,12 @@ from aipacken.services.auth import get_current_user
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
-@router.post("", response_model=RunRead, status_code=201)
+@router.post(
+    "",
+    response_model=RunRead,
+    status_code=201,
+    dependencies=[Depends(rate_limit(RUN_CREATE_LIMIT))],
+)
 async def create_run(
     payload: RunCreate,
     user: User = Depends(get_current_user),

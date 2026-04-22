@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aipacken import storage
 from aipacken.api.authz import get_owned_dataset, scope_by_user
+from aipacken.api.ratelimit import UPLOAD_LIMIT, rate_limit
 from aipacken.api.schemas.datasets import (
     DatasetList,
     DatasetPatch,
@@ -37,7 +38,12 @@ _ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
 _MAX_UPLOAD_BYTES: int = 2 * 1024 * 1024 * 1024
 
 
-@router.post("", response_model=DatasetRead, status_code=201)
+@router.post(
+    "",
+    response_model=DatasetRead,
+    status_code=201,
+    dependencies=[Depends(rate_limit(UPLOAD_LIMIT))],
+)
 async def create_dataset(
     file: UploadFile = File(...),
     name: str | None = Form(default=None),

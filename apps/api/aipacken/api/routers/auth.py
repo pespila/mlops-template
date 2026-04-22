@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aipacken.api.ratelimit import LOGIN_LIMIT, rate_limit
 from aipacken.api.schemas.auth import LoginRequest, UserRead
 from aipacken.db import get_db
 from aipacken.db.models import User
@@ -12,7 +13,11 @@ from aipacken.services.auth import get_current_user, verify_password
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/login", response_model=UserRead)
+@router.post(
+    "/login",
+    response_model=UserRead,
+    dependencies=[Depends(rate_limit(LOGIN_LIMIT))],
+)
 async def login(
     payload: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> User:
