@@ -28,6 +28,16 @@ export function RunDetail() {
     refetchInterval: 5_000,
   });
 
+  // Post-training artifacts (SHAP / bias / selected_hp / artifact rows) land
+  // only after the container exits. While the run is still queued, polling
+  // them is pure waste — 7 concurrent 5s polls had been stacking up and
+  // amplifying any perceived "UI stuck" behaviour on slow backends. Gate
+  // them here so we drop from 7 concurrent polls to 2 during `queued`.
+  const status = run.data?.status;
+  const isQueued = status === "queued";
+  const isTerminal =
+    status === "succeeded" || status === "failed" || status === "cancelled";
+
   const rename = useMutation({
     mutationFn: (name: string) => api.runs.update(id, { display_name: name }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["runs", id] }),
@@ -47,19 +57,25 @@ export function RunDetail() {
     queryKey: ["runs", id, "metrics"],
     queryFn: () => api.runs.metrics(id),
     enabled: Boolean(id),
-    refetchInterval: 5_000,
+    // AutoGluon / HPO can stream per-step metrics during `running`, so we
+    // poll then. Nothing to see during `queued`; stop once terminal.
+    refetchInterval: () => {
+      if (isQueued || isTerminal) return false;
+      return 5_000;
+    },
   });
 
   const artifacts = useQuery({
     queryKey: ["runs", id, "artifacts"],
     queryFn: () => api.runs.artifacts(id),
     enabled: Boolean(id),
-    // Artifact rows land after the container exits — keep polling until we
-    // see something or the run reaches a terminal state.
+    // Artifact rows land after the container exits — don't poll during
+    // queued; poll while running, and poll a bit faster on terminal until
+    // the rows show up. Stop once we have any.
     refetchInterval: (q) => {
-      const status = run.data?.status;
       if ((q.state.data?.length ?? 0) > 0) return false;
-      if (status === "succeeded" || status === "failed" || status === "cancelled") return 3_000;
+      if (isQueued) return false;
+      if (isTerminal) return 3_000;
       return 5_000;
     },
   });
@@ -68,14 +84,22 @@ export function RunDetail() {
     queryKey: ["runs", id, "explanations"],
     queryFn: () => api.runs.explanations(id),
     enabled: Boolean(id),
-    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? false : 5_000),
+    refetchInterval: (q) => {
+      if (q.state.data && q.state.data.length > 0) return false;
+      if (isQueued) return false;
+      return 5_000;
+    },
   });
 
   const bias = useQuery({
     queryKey: ["runs", id, "bias"],
     queryFn: () => api.runs.bias(id),
     enabled: Boolean(id),
-    refetchInterval: (q) => (q.state.data && q.state.data.length > 0 ? false : 5_000),
+    refetchInterval: (q) => {
+      if (q.state.data && q.state.data.length > 0) return false;
+      if (isQueued) return false;
+      return 5_000;
+    },
   });
 
   const selectedHp = useQuery({
@@ -83,7 +107,11 @@ export function RunDetail() {
     queryFn: () => api.runs.selectedHyperparams(id),
     enabled: Boolean(id),
     // Poll until the artifact lands; once we have non-legacy data, stop.
-    refetchInterval: (q) => (q.state.data && q.state.data.source !== "legacy" ? false : 5_000),
+    refetchInterval: (q) => {
+      if (q.state.data && q.state.data.source !== "legacy") return false;
+      if (isQueued) return false;
+      return 5_000;
+    },
   });
 
   const logHistory = useQuery({
@@ -93,8 +121,7 @@ export function RunDetail() {
     // Keep polling the persisted transcript until the run finishes so the
     // "Closed" SSE state still shows a complete log after a refresh.
     refetchInterval: (q) => {
-      const status = run.data?.status;
-      if (status === "succeeded" || status === "failed" || status === "cancelled") {
+      if (isTerminal) {
         return (q.state.data?.length ?? 0) > 0 ? false : 3_000;
       }
       return 5_000;

@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "ArtifactRead": {
-        "description": "Frontend-facing artifact row.\n\nThe DB column is still named `uri` for historical reasons but it stores a\nrelative path under `/var/platform-data`. `download_url` is computed.",
+        "description": "Frontend-facing artifact row.\n\nPost-MLflow cutover: ``uri`` is the ``mlflow-artifacts:/<run_id>/<path>``\nURI returned by the mlflow_client adapter. ``download_url`` is computed\nat model_validate time and proxies through the api so the SPA does not\ntalk to MLflow directly.",
         "properties": {
           "content_type": {
             "anyOf": [
@@ -283,15 +283,12 @@
         "type": "object"
       },
       "DeploymentCreate": {
+        "description": "Pick a platform Run (or its MLflow ModelVersion) to deploy.\n\nAfter Batch 35b the API doesn't mint a separate DB ModelVersion row\nper train_run \u2014 MLflow's registry owns that. Clients send the\nplatform ``run_id`` they want deployed; the server resolves the\nMLflow registered-model name + version number and snapshots both on\nthe Deployment row so the worker can stage artifacts without another\nMLflow round-trip.",
         "properties": {
           "audit_payloads": {
             "default": false,
             "title": "Audit Payloads",
             "type": "boolean"
-          },
-          "model_version_id": {
-            "title": "Model Version Id",
-            "type": "string"
           },
           "name": {
             "title": "Name",
@@ -301,10 +298,14 @@
             "default": 1,
             "title": "Replicas",
             "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
           }
         },
         "required": [
-          "model_version_id",
+          "run_id",
           "name"
         ],
         "title": "DeploymentCreate",
@@ -414,17 +415,33 @@
             ],
             "title": "Last Health At"
           },
-          "model_version_id": {
-            "title": "Model Version Id",
+          "model_kind": {
+            "default": "sklearn",
+            "title": "Model Kind",
             "type": "string"
           },
           "name": {
             "title": "Name",
             "type": "string"
           },
+          "registered_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered Model Name"
+          },
           "replicas": {
             "title": "Replicas",
             "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
           },
           "slug": {
             "title": "Slug",
@@ -443,11 +460,22 @@
             "default": "",
             "title": "Url",
             "type": "string"
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Number"
           }
         },
         "required": [
           "id",
-          "model_version_id",
+          "run_id",
           "name",
           "slug",
           "status",
@@ -1136,8 +1164,35 @@
             "title": "Id",
             "type": "string"
           },
-          "model_version_id": {
-            "title": "Model Version Id",
+          "mlflow_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mlflow Run Id"
+          },
+          "model_kind": {
+            "default": "sklearn",
+            "title": "Model Kind",
+            "type": "string"
+          },
+          "registered_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered Model Name"
+          },
+          "run_id": {
+            "title": "Run Id",
             "type": "string"
           },
           "size_bytes": {
@@ -1170,11 +1225,22 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "version_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Number"
           }
         },
         "required": [
           "id",
-          "model_version_id",
+          "run_id",
           "status",
           "created_at",
           "updated_at"
@@ -1211,7 +1277,7 @@
         "type": "object"
       },
       "ModelVersionPromote": {
-        "description": "Target stage for a ModelVersion promotion.\n\n``production`` at-most-one enforcement is done atomically server-side:\nany existing production version of the same RegisteredModel is moved\nto ``archived`` inside the same transaction as the promotion.",
+        "description": "Target stage for a ModelVersion promotion.\n\nMaps to MLflow aliases:\n  * ``staging`` \u2192 sets ``@staging`` alias on the version.\n  * ``production`` \u2192 sets ``@production`` (MLflow guarantees alias\n    uniqueness per registered model, so the previous production\n    version is automatically detached).\n  * ``archived`` \u2192 removes ``@production`` if set.\n  * ``none`` \u2192 removes any alias set by us.",
         "properties": {
           "stage": {
             "enum": [
@@ -1231,7 +1297,16 @@
         "type": "object"
       },
       "ModelVersionRead": {
+        "description": "Projection of an MLflow ModelVersion for the UI.\n\nFields come straight from the MLflow ``ModelVersion`` entity, with\n``stage`` derived from the alias set (``@production`` \u2192 ``production``,\n``@staging`` \u2192 ``staging``, else ``none``). The enriched fields\n(metrics, dataset, experiment) are resolved server-side by joining\nthe MLflow run's platform.run_id tag back to the DB.",
         "properties": {
+          "aliases": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1275,6 +1350,7 @@
             "type": "string"
           },
           "input_schema_json": {
+            "default": {},
             "title": "Input Schema Json",
             "type": "object"
           },
@@ -1302,11 +1378,16 @@
             "type": "string"
           },
           "output_schema_json": {
+            "default": {},
             "title": "Output Schema Json",
             "type": "object"
           },
           "registered_model_id": {
             "title": "Registered Model Id",
+            "type": "string"
+          },
+          "registered_model_name": {
+            "title": "Registered Model Name",
             "type": "string"
           },
           "run_id": {
@@ -1351,13 +1432,12 @@
         },
         "required": [
           "id",
+          "registered_model_name",
           "registered_model_id",
-          "run_id",
           "version",
           "stage",
+          "run_id",
           "model_kind",
-          "input_schema_json",
-          "output_schema_json",
           "created_at",
           "updated_at"
         ],
@@ -2084,16 +2164,18 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/artifacts/{artifact_id}/download": {
+    "/api/artifacts/download": {
       "get": {
-        "operationId": "download_artifact_api_artifacts__artifact_id__download_get",
+        "operationId": "download_artifact_api_artifacts_download_get",
         "parameters": [
           {
-            "in": "path",
-            "name": "artifact_id",
+            "description": "Artifact id from /api/runs/{run}/artifacts",
+            "in": "query",
+            "name": "id",
             "required": true,
             "schema": {
-              "title": "Artifact Id",
+              "description": "Artifact id from /api/runs/{run}/artifacts",
+              "title": "Id",
               "type": "string"
             }
           }
@@ -2654,6 +2736,7 @@
         ]
       },
       "post": {
+        "description": "Deploy the MLflow model attached to a platform Run.\n\nResolves the MLflow ModelVersion by looking up the Run's\n``platform.run_id`` tag in the registry \u2014 the trainer registers\nexactly one version per successful run. The Deployment row\nsnapshots ``(registered_model_name, version_number, mlflow_run_id,\nmodel_kind)`` so the serving worker can stage artifacts without a\nround-trip to MLflow.",
         "operationId": "create_deployment_api_deployments_post",
         "requestBody": {
           "content": {
@@ -3286,6 +3369,73 @@
         ]
       }
     },
+    "/api/internal/mlflow/diag/{platform_run_id}": {
+      "get": {
+        "description": "Per-run read-path trace \u2014 what the api actually sees for one run.\n\nWhen the UI shows empty Artifacts / Metrics / Model panels for a run\nthat *did* upload to MLflow, the question is always the same: which\nstep of the chain (experiment lookup \u2192 run lookup by tag \u2192\nlist_artifacts \u2192 download_artifact) is returning nothing? This\nendpoint walks the chain and returns each step's output so we can\npinpoint the failure in under a minute without shelling in.\n\nAdmin-gated. The response includes every platform.* tag on the\nMLflow run (user_id, experiment_id, dataset_id, \u2026) plus the full\nbias.json and selected_hyperparams.json, which is legitimately\nuseful for debugging but must not be readable cross-tenant.",
+        "operationId": "mlflow_run_diag_api_internal_mlflow_diag__platform_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "platform_run_id",
+            "required": true,
+            "schema": {
+              "title": "Platform Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Mlflow Run Diag Api Internal Mlflow Diag  Platform Run Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mlflow Run Diag",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/internal/mlflow/diagnostics": {
+      "get": {
+        "description": "Connectivity + configuration report for the MLflow tracking server.\n\nAdmin-gated: the previous \"unauthenticated on purpose\" design\nreturned the tracking URI and reachability status to any network\npeer, which paired with the per-run diag endpoint below to leak\ntenant identifiers across tenants. The URI is still a deployment\nsecret in locked-down configurations, so gate to admin.",
+        "operationId": "mlflow_diagnostics_api_internal_mlflow_diagnostics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Mlflow Diagnostics Api Internal Mlflow Diagnostics Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mlflow Diagnostics",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
     "/api/internal/predictions": {
       "post": {
         "operationId": "ingest_predictions_api_internal_predictions_post",
@@ -3493,7 +3643,7 @@
     },
     "/api/models/{model_id}": {
       "delete": {
-        "description": "Delete a registered model and every version under it.\n\nFails with 409 if any version is still referenced by a Deployment \u2014 the\ncaller must tear those down first. On success the on-disk version\ndirectories are removed alongside the DB rows.",
+        "description": "Delete an MLflow RegisteredModel + every version under it.\n\nFails with 409 if any Deployment still references a version of this\nmodel \u2014 the caller must tear those down first.",
         "operationId": "delete_model_api_models__model_id__delete",
         "parameters": [
           {
@@ -3567,6 +3717,7 @@
         ]
       },
       "patch": {
+        "description": "Update the MLflow RegisteredModel name / description (admin only).\n\nRenaming walks Deployment.registered_model_name and\nModelPackage.registered_model_name to the new name in the same\ncommit so snapshots keep pointing at the right MLflow entity.",
         "operationId": "update_model_api_models__model_id__patch",
         "parameters": [
           {
@@ -3663,116 +3814,9 @@
         ]
       }
     },
-    "/api/models/{model_id}/versions/{version_id}/package": {
-      "post": {
-        "description": "Kick off a new package build for a specific version.\n\nRe-triggering always creates a fresh row \u2014 older packages stay on disk\nuntil the cleanup job prunes them, so the user can still download in-flight\nbuilds while a newer one assembles.",
-        "operationId": "create_package_api_models__model_id__versions__version_id__package_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "model_id",
-            "required": true,
-            "schema": {
-              "title": "Model Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "version_id",
-            "required": true,
-            "schema": {
-              "title": "Version Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelPackageRead"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Package",
-        "tags": [
-          "packages"
-        ]
-      }
-    },
-    "/api/models/{model_id}/versions/{version_id}/packages": {
-      "get": {
-        "operationId": "list_packages_for_version_api_models__model_id__versions__version_id__packages_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "model_id",
-            "required": true,
-            "schema": {
-              "title": "Model Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "version_id",
-            "required": true,
-            "schema": {
-              "title": "Version Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ModelPackageRead"
-                  },
-                  "title": "Response List Packages For Version Api Models  Model Id  Versions  Version Id  Packages Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Packages For Version",
-        "tags": [
-          "packages"
-        ]
-      }
-    },
     "/api/models/{model_id}/versions/{version_id}/promote": {
       "post": {
-        "description": "Move a ModelVersion to a target stage atomically.\n\nWhen ``stage=production`` is requested, any existing production version\nof the same RegisteredModel is first demoted to ``archived`` in the\nsame transaction, then the target is set to production. The partial\nunique index from migration 0005 also enforces this at the DB level\non Postgres.",
+        "description": "Promote an MLflow ModelVersion via alias writes.\n\n``version_id`` is ``{name}:{version}`` \u2014 we accept both that shape\nand a bare version number. Target ``production`` sets ``@production``\n(MLflow alias uniqueness auto-moves it off the previous version).\n``staging`` sets ``@staging``. ``archived`` / ``none`` clear both.",
         "operationId": "promote_version_api_models__model_id__versions__version_id__promote_post",
         "parameters": [
           {
@@ -4074,6 +4118,7 @@
     },
     "/api/runs/{run_id}/artifacts": {
       "get": {
+        "description": "Flattened artifact tree for a run \u2014 sourced from MLflow.",
         "operationId": "get_run_artifacts_api_runs__run_id__artifacts_get",
         "parameters": [
           {
@@ -4120,6 +4165,7 @@
     },
     "/api/runs/{run_id}/bias": {
       "get": {
+        "description": "Fairness metrics per sensitive feature \u2014 from MLflow artifacts.\n\nTrainer writes a single top-level dict into ``reports/bias.json``:\n\n    {\n      \"metric\": \"accuracy\",\n      \"groups\": {\"<group>\": <value>, \u2026},\n      \"deltas\": {\"<group>\": <delta-vs-baseline>, \u2026},\n      \"overall\": <baseline>,\n      \"sensitive_features\": [\"col-a\", \"col-b\", \u2026],\n      \"groups_truncated\": false,\n      \"groups_total\": N,\n    }\n\nThe UI card expects a list of \"one group rollup per sensitive\nfeature\" rows \u2014 we emit exactly one row here (the full\nfairlearn MetricFrame) with the sensitive features concatenated\ninto the label. An empty ``groups`` dict still returns the row so\nthe UI can render \"metric=accuracy overall=1.0 (no per-group\nsplits)\" instead of the misleading \"no bias analysis\".",
         "operationId": "get_run_bias_api_runs__run_id__bias_get",
         "parameters": [
           {
@@ -4208,6 +4254,7 @@
     },
     "/api/runs/{run_id}/explanations": {
       "get": {
+        "description": "SHAP / feature-importance JSON \u2014 read from the run's MLflow artifacts.\n\nThe trainer writes ``reports/shap.json`` into its local run directory\nand ``mlflow_sink.log_artifact`` uploads it under\n``reports/shap.json`` on the MLflow side. This reader fetches that\nJSON via MLflow's artifact download.",
         "operationId": "get_run_explanations_api_runs__run_id__explanations_get",
         "parameters": [
           {
@@ -4304,6 +4351,7 @@
     },
     "/api/runs/{run_id}/metrics": {
       "get": {
+        "description": "Full step-series of metrics for a run \u2014 sourced from MLflow.",
         "operationId": "get_run_metrics_api_runs__run_id__metrics_get",
         "parameters": [
           {
@@ -4348,9 +4396,98 @@
         ]
       }
     },
+    "/api/runs/{run_id}/package": {
+      "post": {
+        "description": "Kick off a package build for the MLflow version produced by ``run_id``.\n\nRe-triggering always creates a fresh row \u2014 older packages stay on\ndisk until the cleanup job prunes them, so the user can still\ndownload in-flight builds while a newer one assembles.",
+        "operationId": "create_package_api_runs__run_id__package_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPackageRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Package",
+        "tags": [
+          "packages"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/packages": {
+      "get": {
+        "operationId": "list_packages_for_run_api_runs__run_id__packages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelPackageRead"
+                  },
+                  "title": "Response List Packages For Run Api Runs  Run Id  Packages Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Packages For Run",
+        "tags": [
+          "packages"
+        ]
+      }
+    },
     "/api/runs/{run_id}/selected_hyperparams": {
       "get": {
-        "description": "Return the parsed ``selected_hyperparams.json`` artifact for a run.\n\nFalls back to the raw ``Run.hyperparams_json`` (labelled ``source=legacy``)\nfor runs trained before this artifact was introduced so the Model tab on\nolder runs still renders a useful payload.",
+        "description": "Return the parsed ``selected_hyperparams.json`` artifact for a run.\n\nPrimary source is MLflow (the trainer uploads the file under\n``artifacts/selected_hyperparams.json``). Falls back to the raw\n``Run.hyperparams_json`` (labelled ``source=legacy``) when MLflow\nhas nothing \u2014 that's either a pre-MLflow run or one whose trainer\nfailed before writing the artifact.",
         "operationId": "get_run_selected_hyperparams_api_runs__run_id__selected_hyperparams_get",
         "parameters": [
           {

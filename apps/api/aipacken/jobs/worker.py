@@ -116,7 +116,7 @@ class FastWorkerSettings:
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     queue_name = FAST_QUEUE
-    max_jobs = 8
+    max_jobs = _settings.training_fast_max_jobs
     retry_jobs = True
     job_timeout = 600
 
@@ -128,10 +128,11 @@ class SlowWorkerSettings:
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     queue_name = SLOW_QUEUE
-    # Concurrency 2 — each trainer can own a whole core + several GB of
-    # RAM. Host resource-limit cap on the worker-slow service sizes this
-    # at 4 CPU / 4 G; 2 in flight keeps headroom.
-    max_jobs = 2
+    # Default 2 — each trainer can own a whole core + several GB of RAM.
+    # Tunable via TRAINING_SLOW_MAX_JOBS so hosts with more headroom can
+    # run more forecasting / supervised trainers in parallel without
+    # starving new runs behind long-running AutoGluon jobs.
+    max_jobs = _settings.training_slow_max_jobs
     retry_jobs = True
     job_timeout = _TRAIN_TIMEOUT
 

@@ -52,15 +52,6 @@ export function TrainingLogStream({
   const scrollRef = useRef<HTMLDivElement>(null);
   const events = useMemo(() => [eventName] as const, [eventName]);
 
-  // Refill the transcript when history arrives/changes. Replaces rather than
-  // appends — persisted logs are authoritative for what happened before the
-  // SSE connection opened, and duplicates from a reconnect would be confusing.
-  useEffect(() => {
-    if (history && history.length > 0) {
-      setLines(history.slice(-maxLines));
-    }
-  }, [history, maxLines]);
-
   const { connectionState } = useEventSource<LogLine>({
     url,
     events,
@@ -72,6 +63,19 @@ export function TrainingLogStream({
       });
     },
   });
+
+  // Refill the transcript when history arrives/changes. Replaces rather than
+  // appends — persisted logs are authoritative for what happened before the
+  // SSE connection opened, and duplicates from a reconnect would be confusing.
+  // Once SSE is live, ignore further history updates — the stream is
+  // authoritative and a polled history array is recreated every 5s, which
+  // otherwise re-mounts the log list on every tick.
+  useEffect(() => {
+    if (connectionState === "live") return;
+    if (history && history.length > 0) {
+      setLines(history.slice(-maxLines));
+    }
+  }, [history, maxLines, connectionState]);
 
   const filtered = useMemo(() => {
     if (!filter.trim()) return lines;

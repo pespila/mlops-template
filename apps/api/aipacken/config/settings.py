@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     training_default_cpu: int = 4
     training_default_memory_gb: int = 8
     training_job_timeout_seconds: int = 7200
+    # Slow-queue concurrency — each trainer can own a whole core plus
+    # several GB of RAM, so bump with care. Env-tunable so beefier hosts
+    # can run more forecasting / supervised trainers in parallel without
+    # a code change.
+    training_slow_max_jobs: int = 2
+    training_fast_max_jobs: int = 8
 
     session_cookie_name: str = "platform_session"
     session_max_age_seconds: int = 86400

@@ -44,6 +44,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# "Never 500" posture: every MLflow helper returns a safe default when the
+# tracking server is unreachable. But catching bare ``Exception`` silently
+# swallows programming bugs (AttributeError, TypeError) too, which hid a
+# filter-string parsing bug for a whole batch. Narrow to the actual failure
+# surface — MLflow API errors, transport errors, filesystem errors — and
+# let truly unexpected exceptions bubble up where the stack trace is useful.
+def _mlflow_errors() -> tuple[type[BaseException], ...]:
+    try:
+        from mlflow.exceptions import MlflowException  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover — mlflow is a hard runtime dep
+        return (OSError, ConnectionError)
+    return (MlflowException, OSError, ConnectionError)
+
+
+_EXPECTED_MLFLOW_ERRORS = _mlflow_errors()
+
+
 def mlflow_enabled() -> bool:
     """True iff MLflow backend is on AND a tracking URI is configured."""
     s = get_settings()
@@ -59,7 +76,7 @@ def get_client() -> MlflowClient | None:
         from mlflow import MlflowClient
 
         return MlflowClient(tracking_uri=get_settings().mlflow_tracking_uri)
-    except Exception as exc:
+    except (ImportError, *_EXPECTED_MLFLOW_ERRORS) as exc:
         logger.warning("mlflow.client_init_failed error=%s", exc)
         return None
 
@@ -88,7 +105,7 @@ def list_experiments(user_id: str | None = None) -> list[dict[str, Any]]:
         return []
     try:
         experiments = client.search_experiments(max_results=500)
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.list_experiments_failed error=%s", exc)
         return []
     if user_id is None:
@@ -104,7 +121,7 @@ def get_experiment_by_name(name: str) -> dict[str, Any] | None:
         return None
     try:
         exp = client.get_experiment_by_name(name)
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.get_experiment_failed name=%s error=%s", name, exc)
         return None
     return _experiment_to_read(exp) if exp else None
@@ -173,7 +190,7 @@ def find_run_by_platform_id(platform_run_id: str) -> MlflowRun | None:
             filter_string=f"tags.`platform.run_id` = '{platform_run_id}'",
             max_results=1,
         )
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.find_run_failed platform_run_id=%s error=%s", platform_run_id, exc)
         return None
     return results[0] if results else None
@@ -198,7 +215,7 @@ def list_runs(experiment_id: str | None = None, limit: int = 50) -> list[dict[st
             max_results=limit,
             order_by=["attribute.start_time DESC"],
         )
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.list_runs_failed error=%s", exc)
         return []
     return [_run_to_read(r) for r in runs]
@@ -240,7 +257,7 @@ def get_run_metrics(platform_run_id: str) -> list[dict[str, Any]]:
                         "updated_at": _ms_to_dt(m.timestamp),
                     }
                 )
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning(
             "mlflow.get_metrics_failed platform_run_id=%s error=%s", platform_run_id, exc
         )
@@ -265,7 +282,7 @@ def list_run_artifacts(platform_run_id: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     try:
         _walk_artifacts(client, run.info.run_id, "", out, platform_run_id)
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning(
             "mlflow.list_artifacts_failed platform_run_id=%s error=%s",
             platform_run_id,
@@ -330,7 +347,8 @@ def read_run_json(platform_run_id: str, artifact_path: str) -> dict[str, Any] | 
         )
         with open(local) as fp:
             return json.load(fp)
-    except Exception as exc:
+    except (*_EXPECTED_MLFLOW_ERRORS, ValueError) as exc:
+        # ValueError covers json.JSONDecodeError (its parent class).
         logger.warning(
             "mlflow.read_json_failed platform_run_id=%s path=%s error=%s",
             platform_run_id,
@@ -376,7 +394,7 @@ def download_run_artifacts(
             artifact_path=artifact_path,
             dst_path=dst_dir,
         )
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning(
             "mlflow.download_artifacts_failed platform_run_id=%s error=%s",
             platform_run_id,
@@ -395,7 +413,9 @@ def download_run_artifacts(
             for child in local_real.rglob("*"):
                 if not _path_is_under(child.resolve(), dst_real):
                     raise RuntimeError(f"traversal: {child} escapes {dst_real}")
-    except Exception as exc:
+    except (RuntimeError, *_EXPECTED_MLFLOW_ERRORS) as exc:
+        # The traversal check itself raises RuntimeError on escape; keep
+        # the MLflow family for any resolve/stat failure during the walk.
         logger.warning(
             "mlflow.download_artifacts_traversal_rejected platform_run_id=%s error=%s",
             platform_run_id,
@@ -434,10 +454,13 @@ def ensure_registered_model(name: str, description: str | None = None) -> None:
         return
     try:
         client.get_registered_model(name)
-    except Exception:
+    except _EXPECTED_MLFLOW_ERRORS:
+        # The "not found" path — create it. Any second-layer failure here
+        # is logged but swallowed; callers tolerate a missing registered
+        # model (downstream create_model_version surfaces the real error).
         try:
             client.create_registered_model(name=name, description=description)
-        except Exception as exc:
+        except _EXPECTED_MLFLOW_ERRORS as exc:
             logger.warning("mlflow.create_registered_model_failed name=%s error=%s", name, exc)
 
 
@@ -465,7 +488,7 @@ def register_model_version(
             description=description,
             tags=tags or {},
         )
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.create_model_version_failed name=%s error=%s", name, exc)
         return None
 
@@ -485,7 +508,7 @@ def set_alias(name: str, alias: str, version: int | str) -> bool:
     try:
         client.set_registered_model_alias(name=name, alias=alias, version=str(version))
         return True
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.set_alias_failed name=%s alias=%s error=%s", name, alias, exc)
         return False
 
@@ -497,7 +520,7 @@ def delete_alias(name: str, alias: str) -> bool:
     try:
         client.delete_registered_model_alias(name=name, alias=alias)
         return True
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.delete_alias_failed name=%s alias=%s error=%s", name, alias, exc)
         return False
 
@@ -508,7 +531,7 @@ def list_registered_models(max_results: int = 500) -> list[Any]:
         return []
     try:
         return list(client.search_registered_models(max_results=max_results))
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.list_registered_models_failed error=%s", exc)
         return []
 
@@ -519,7 +542,7 @@ def get_registered_model(name: str) -> Any | None:
         return None
     try:
         return client.get_registered_model(name)
-    except Exception:
+    except _EXPECTED_MLFLOW_ERRORS:
         return None
 
 
@@ -559,7 +582,7 @@ def search_model_versions(name: str) -> list[Any]:
     try:
         rows = client.search_model_versions(f"name='{name}'")
         return sorted(rows, key=lambda r: int(r.version), reverse=True)
-    except Exception as exc:
+    except _EXPECTED_MLFLOW_ERRORS as exc:
         logger.warning("mlflow.search_model_versions_failed name=%s error=%s", name, exc)
         return []
 
@@ -570,7 +593,7 @@ def get_model_version(name: str, version: int | str) -> Any | None:
         return None
     try:
         return client.get_model_version(name=name, version=str(version))
-    except Exception:
+    except _EXPECTED_MLFLOW_ERRORS:
         return None
 
 
@@ -580,7 +603,7 @@ def get_version_by_alias(name: str, alias: str) -> Any | None:
         return None
     try:
         return client.get_model_version_by_alias(name=name, alias=alias)
-    except Exception:
+    except _EXPECTED_MLFLOW_ERRORS:
         return None
 
 

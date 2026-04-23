@@ -23,5 +23,10 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
     globals: true,
+    // Vitest discovery matches **/*.spec.ts by default, which swallows the
+    // Playwright specs under e2e/ and blows up because those use the
+    // Playwright `test` global (not vitest's). Keep vitest scoped to src/.
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    exclude: ["node_modules", "dist", "e2e", "test-results"],
   },
 });
