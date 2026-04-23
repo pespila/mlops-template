@@ -1,13 +1,16 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-import type { TaskKind } from "@/lib/api/client";
+import type { TaskFamily, TaskKind } from "@/lib/api/client";
 
 export type FeatureTransformKind =
   | "keep"
   | "drop"
   | "standardize"
   | "one-hot"
+  | "ordinal"
+  | "label"
+  | "date-features"
   | "impute-mean"
   | "impute-median"
   | "impute-mode";
@@ -23,7 +26,7 @@ export interface TrainValTestSplit {
   test: number;
 }
 
-export type WizardStep = 1 | 2 | 3 | 4 | 5 | 6;
+export type WizardStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 /**
  * HPO range entry shape (mirrors backend `HpoSearchRangeInt / Float /
@@ -49,6 +52,20 @@ export interface WizardState {
   hpoSearchSpace: Record<string, HpoSearchEntry>;
   /** User-selected task override; null → backend infers from target. */
   task: TaskKind | null;
+  /** Problem-type selected in Step 3. Null until the user picks one. */
+  taskFamily: TaskFamily | null;
+  /** Forecasting: column holding the time axis. */
+  timeColumn: string | null;
+  /** Forecasting: number of steps ahead to predict (used at final-fit time). */
+  forecastHorizon: number;
+  /** Recommender: user id column. */
+  userColumn: string | null;
+  /** Recommender: item id column. */
+  itemColumn: string | null;
+  /** Recommender: rating / interaction value column. */
+  ratingColumn: string | null;
+  /** Recommender: explicit (rating) vs implicit (interaction-only) feedback. */
+  feedbackType: "explicit" | "implicit";
   /** True when the user has enabled HPO; strictly either/or with `hyperparams`. */
   hpoEnabled: boolean;
   /** Optuna trial budget — propagated into the HpoConfig on submit. */
@@ -79,6 +96,13 @@ export interface WizardState {
   setHyperparams: (h: Record<string, unknown>) => void;
   setHpoSearchSpace: (s: Record<string, HpoSearchEntry>) => void;
   setTask: (t: TaskKind | null) => void;
+  setTaskFamily: (f: TaskFamily | null) => void;
+  setTimeColumn: (c: string | null) => void;
+  setForecastHorizon: (n: number) => void;
+  setUserColumn: (c: string | null) => void;
+  setItemColumn: (c: string | null) => void;
+  setRatingColumn: (c: string | null) => void;
+  setFeedbackType: (f: "explicit" | "implicit") => void;
   setHpoEnabled: (v: boolean) => void;
   setHpoTrials: (n: number) => void;
   setHpoTimeoutSec: (n: number) => void;
@@ -108,6 +132,13 @@ const INITIAL: Omit<
   | "setHyperparams"
   | "setHpoSearchSpace"
   | "setTask"
+  | "setTaskFamily"
+  | "setTimeColumn"
+  | "setForecastHorizon"
+  | "setUserColumn"
+  | "setItemColumn"
+  | "setRatingColumn"
+  | "setFeedbackType"
   | "setHpoEnabled"
   | "setHpoTrials"
   | "setHpoTimeoutSec"
@@ -130,6 +161,13 @@ const INITIAL: Omit<
   hyperparams: {},
   hpoSearchSpace: {},
   task: null,
+  taskFamily: null,
+  timeColumn: null,
+  forecastHorizon: 12,
+  userColumn: null,
+  itemColumn: null,
+  ratingColumn: null,
+  feedbackType: "explicit",
   hpoEnabled: false,
   hpoTrials: 30,
   hpoTimeoutSec: 1800,
@@ -140,7 +178,7 @@ const INITIAL: Omit<
   experimentId: null,
 };
 
-const MAX_STEP: WizardStep = 6;
+const MAX_STEP: WizardStep = 7;
 
 export const useWizardStore = create<WizardState>()(
   persist(
@@ -167,6 +205,13 @@ export const useWizardStore = create<WizardState>()(
       setHyperparams: (hyperparams) => set({ hyperparams }),
       setHpoSearchSpace: (hpoSearchSpace) => set({ hpoSearchSpace }),
       setTask: (task) => set({ task }),
+      setTaskFamily: (taskFamily) => set({ taskFamily }),
+      setTimeColumn: (timeColumn) => set({ timeColumn }),
+      setForecastHorizon: (forecastHorizon) => set({ forecastHorizon }),
+      setUserColumn: (userColumn) => set({ userColumn }),
+      setItemColumn: (itemColumn) => set({ itemColumn }),
+      setRatingColumn: (ratingColumn) => set({ ratingColumn }),
+      setFeedbackType: (feedbackType) => set({ feedbackType }),
       setHpoEnabled: (hpoEnabled) => set({ hpoEnabled }),
       setHpoTrials: (hpoTrials) => set({ hpoTrials }),
       setHpoTimeoutSec: (hpoTimeoutSec) => set({ hpoTimeoutSec }),
@@ -189,13 +234,19 @@ export const useWizardStore = create<WizardState>()(
     }),
     {
       name: "aipacken.wizard",
-      version: 3,
+      version: 6,
       storage: createJSONStorage(() => localStorage),
-      migrate: (_persisted, _version) => {
-        // Shape changed between v1 and v2 (new fields + WizardStep widened
-        // to 6). Easier to wipe stale state than migrate field-by-field —
-        // users rarely mid-flight a wizard across deploys.
-        return { ...INITIAL };
+      migrate: (persisted, _version) => {
+        // Merge known INITIAL keys from persisted state so that a version bump
+        // doesn't lose mid-wizard progress. Unknown keys (from older schemas)
+        // are silently dropped; new keys get their INITIAL defaults.
+        const known = Object.keys(INITIAL) as (keyof typeof INITIAL)[];
+        const safe = Object.fromEntries(
+          known
+            .filter((k) => persisted && typeof persisted === "object" && k in (persisted as object))
+            .map((k) => [k, (persisted as Record<string, unknown>)[k]]),
+        );
+        return { ...INITIAL, ...safe };
       },
     },
   ),

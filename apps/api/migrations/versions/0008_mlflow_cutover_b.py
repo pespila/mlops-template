@@ -1,4 +1,6 @@
-"""MLflow cutover (phase B) — drop RegisteredModel + ModelVersion, snapshot fields on Deployment/ModelPackage.
+"""MLflow cutover (phase B): drop RegisteredModel + ModelVersion.
+
+Snapshot fields on Deployment/ModelPackage.
 
 Revision ID: 0008_mlflow_b
 Revises: 0007_mlflow_a
@@ -49,8 +51,16 @@ depends_on = None
 _MAX_DELETEROWS_WITHOUT_OPT_IN = 0
 
 
+_MIGRATION_TABLES = frozenset({"predictions", "deployments", "model_packages"})
+
+
 def _row_count(conn, table: str) -> int:
-    return int(conn.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0)
+    # table is always one of the three names above (called only from
+    # _run_destructive_deletes which iterates that literal tuple) — not
+    # end-user input. noqa kept as documentation of the deliberate choice.
+    if table not in _MIGRATION_TABLES:
+        raise ValueError(f"unexpected table name: {table!r}")
+    return int(conn.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0)  # noqa: S608
 
 
 def _run_destructive_deletes() -> None:

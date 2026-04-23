@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from aipacken import storage
@@ -106,6 +107,17 @@ def create_app() -> FastAPI:
     app.include_router(packages.router, prefix="/api")
 
     app.include_router(sse.router, prefix="/sse")
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.error(
+            "unhandled_exception",
+            path=request.url.path,
+            method=request.method,
+            error=str(exc),
+            exc_info=True,
+        )
+        return JSONResponse(status_code=500, content={"detail": "internal_error"})
 
     # OpenTelemetry — auto-instruments FastAPI + SQLAlchemy + httpx +
     # Redis. Safe to call when OTEL_SDK_DISABLED=true (dev / tests) or

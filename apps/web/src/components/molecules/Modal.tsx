@@ -39,6 +39,8 @@ export function Modal({ open, onClose, title, children, className }: ModalProps)
           <h2 className="font-display text-lg font-bold text-fg1">{title}</h2>
           <button
             type="button"
+            // eslint-disable-next-line jsx-a11y/no-autofocus
+            autoFocus
             onClick={onClose}
             className="inline-flex h-8 w-8 items-center justify-center rounded-md text-fg2 hover:bg-bg-muted hover:text-fg1"
             aria-label="Close"

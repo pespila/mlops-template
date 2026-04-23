@@ -5,6 +5,11 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Scalar types valid as hyperparameter values. Restricting to these prevents
+# arbitrary objects (nested dicts, lists of lists) from being stored and echoed
+# back, reducing the XSS/injection surface when values are rendered in the UI.
+HyperparamValue = str | int | float | bool | None
+
 TaskKind = Literal[
     "regression",
     "binary_classification",
@@ -58,7 +63,7 @@ class RunCreate(BaseModel):
     model_catalog_id: str
     transform_config_id: str | None = None
     transform_config: dict[str, Any] | None = None
-    hyperparams: dict[str, Any] = {}
+    hyperparams: dict[str, HyperparamValue] = {}
     resource_limits: dict[str, Any] = {}
     # User-chosen task override. When null the trainer falls back to inferring
     # from the target column's dtype/cardinality.

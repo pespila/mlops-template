@@ -19,7 +19,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import structlog
+
 from aipacken.config import get_settings
+
+_log = structlog.get_logger(__name__)
 
 
 def _root() -> Path:
@@ -48,15 +52,15 @@ def ensure_base_dirs() -> None:
     root.mkdir(parents=True, exist_ok=True)
     try:
         _os.chmod(root, 0o777)  # noqa: S103
-    except OSError:
-        pass
+    except OSError as exc:
+        _log.warning("storage.chmod_failed", path=str(root), error=str(exc))
     for sub in ("datasets", "runs", "models", "packages"):
         p = root / sub
         p.mkdir(parents=True, exist_ok=True)
         try:
             _os.chmod(p, 0o777)  # noqa: S103
-        except OSError:
-            pass
+        except OSError as exc:
+            _log.warning("storage.chmod_failed", path=str(p), error=str(exc))
 
 
 # ---- dataset ----
@@ -108,8 +112,8 @@ def ensure_run_dirs(run_id: str) -> None:
         p.mkdir(parents=True, exist_ok=True)
         try:
             _os.chmod(p, 0o777)  # noqa: S103 — see ensure_base_dirs() for rationale
-        except OSError:
-            pass
+        except OSError as exc:
+            _log.warning("storage.chmod_failed", path=str(p), error=str(exc))
 
 
 # ---- package ----

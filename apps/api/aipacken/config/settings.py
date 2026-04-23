@@ -39,7 +39,12 @@ class Settings(BaseSettings):
     session_max_age_seconds: int = 86400
 
     # Dev placeholder — same validator below blocks prod boot if unchanged.
-    internal_hmac_token: str = "change-me-internal-hmac-token"  # noqa: S105
+    # min_length=32 matches HMAC-SHA256 key-size guidance; the placeholder
+    # satisfies the constraint so dev starts without extra config.
+    internal_hmac_token: str = Field(
+        default="change-me-change-me-32-char-token",
+        min_length=32,
+    )
 
     trainer_base_image: str = "platform/trainer-base:latest"
     serving_base_image: str = "platform/serving-base:latest"

@@ -5,6 +5,7 @@ import hmac
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aipacken.api.ratelimit import INTERNAL_PREDICT_LIMIT, rate_limit
 from aipacken.api.schemas.predictions import PredictionBulkIngest
 from aipacken.config import get_settings
 from aipacken.db import get_db
@@ -123,7 +124,11 @@ def _verify_token(token: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid_internal_token")
 
 
-@router.post("/predictions", status_code=202)
+@router.post(
+    "/predictions",
+    status_code=202,
+    dependencies=[Depends(rate_limit(INTERNAL_PREDICT_LIMIT))],
+)
 async def ingest_predictions(
     payload: PredictionBulkIngest,
     db: AsyncSession = Depends(get_db),

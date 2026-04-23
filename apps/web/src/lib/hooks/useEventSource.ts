@@ -39,10 +39,18 @@ export function useEventSource<T>({
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedByUserRef = useRef<boolean>(false);
   const onEventRef = useRef(onEvent);
+  // Keep the events list in a ref so callers can pass a new array reference
+  // on every render without triggering a reconnect. Event names are stable
+  // for a given SSE endpoint; only url and enabled should drive reconnects.
+  const eventsRef = useRef(events);
 
   useEffect(() => {
     onEventRef.current = onEvent;
   }, [onEvent]);
+
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   useEffect(() => {
     if (!enabled) {
@@ -71,7 +79,7 @@ export function useEventSource<T>({
         }
       };
 
-      for (const name of events) {
+      for (const name of eventsRef.current) {
         source.addEventListener(name, listener as EventListener);
       }
       source.addEventListener("message", listener as EventListener);
@@ -102,8 +110,7 @@ export function useEventSource<T>({
       }
       setState("closed");
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, enabled, events.join("|")]);
+  }, [url, enabled]);
 
   return {
     connectionState: state,

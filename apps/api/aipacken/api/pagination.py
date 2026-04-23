@@ -37,7 +37,8 @@ def pagination_params(
     offset: int = Query(
         default=0,
         ge=0,
-        description="Row offset for the page (0-based).",
+        le=100_000,
+        description="Row offset for the page (0-based, max 100 000).",
     ),
 ) -> Pagination:
     return Pagination(limit=limit, offset=offset)

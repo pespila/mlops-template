@@ -80,3 +80,8 @@ LOGIN_LIMIT = RateLimit(name="auth_login", limit=10, window_seconds=60)
 PREDICT_LIMIT = RateLimit(name="predict", limit=600, window_seconds=60)
 UPLOAD_LIMIT = RateLimit(name="dataset_upload", limit=30, window_seconds=300)
 RUN_CREATE_LIMIT = RateLimit(name="run_create", limit=60, window_seconds=300)
+# Internal endpoint called by serving containers to batch-ingest prediction
+# logs. High ceiling because batches arrive frequently from multiple replicas,
+# but still rate-limited so a misconfigured or compromised container can't
+# flood Postgres.
+INTERNAL_PREDICT_LIMIT = RateLimit(name="internal_predict", limit=2000, window_seconds=60)

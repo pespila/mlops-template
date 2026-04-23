@@ -18,7 +18,8 @@
     "close": "Schließen",
     "copy": "Kopieren",
     "copied": "Kopiert",
-    "empty": "Noch nichts vorhanden"
+    "empty": "Noch nichts vorhanden",
+    "actions": "Aktionen"
   },
   "dashboard": {
     "headline": "ML-Modelle trainieren, deployen und abfragen - alles auf Ihrem Rechner.",
@@ -45,7 +46,11 @@
       "status": "Status",
       "created": "Erstellt"
     },
-    "empty": "Noch keine Datensätze. Laden Sie Ihre erste CSV- oder Parquet-Datei hoch."
+    "empty": "Noch keine Datensätze. Laden Sie Ihre erste CSV- oder Parquet-Datei hoch.",
+    "delete": "Löschen",
+    "deleteConfirm": "Diesen Datensatz dauerhaft löschen?",
+    "rename": "Umbenennen",
+    "columnTypeChanged": "Spaltentyp aktualisiert. Profil wird neu berechnet…"
   },
   "experiments": {
     "title": "Experimente",
@@ -56,17 +61,65 @@
   "wizard": {
     "step1": "Datensatz",
     "step2": "Profil",
-    "step3": "Features",
-    "step4": "Ziel und Split",
-    "step5": "Modell",
-    "step6": "Hyperparameter",
-    "finish": "Training starten →"
+    "step3": "Problemtyp",
+    "step4": "Features",
+    "step5": "Rollen und Split",
+    "step6": "Modell",
+    "step7": "Hyperparameter",
+    "finish": "Training starten →",
+    "clear": "Zurücksetzen",
+    "clearConfirm": "Gesamten Assistenten zurücksetzen und neu beginnen?",
+    "selectAll": "Alle auswählen",
+    "deselectAll": "Alle abwählen",
+    "notSuitedForTask": "Nicht ideal für die gewählte Aufgabe",
+    "encoder": "Encoder",
+    "encoderOneHot": "One-hot",
+    "encoderLabel": "Label",
+    "encoderOrdinal": "Ordinal",
+    "problemTypeHeading": "Problemtyp",
+    "problemTypeSubtitle": "Wählen Sie die Art des Problems. Das bestimmt, welche Spalten Sie als Nächstes zuweisen müssen und welche Modelle verfügbar sind.",
+    "families": {
+      "supervised": {
+        "title": "Supervised",
+        "blurb": "Zielspalte aus Feature-Spalten vorhersagen.",
+        "bullet1": "Regression oder Klassifikation",
+        "bullet2": "Benötigt eine Zielspalte",
+        "bullet3": "Train / Validation / Test Split"
+      },
+      "forecasting": {
+        "title": "Prognose",
+        "blurb": "Zukünftige Werte einer Zeitreihe vorhersagen.",
+        "bullet1": "Benötigt Zeit- und Wertspalte",
+        "bullet2": "Temporaler Train / Test Split",
+        "bullet3": "Horizont beim Training konfigurierbar"
+      },
+      "recommender": {
+        "title": "Empfehlung",
+        "blurb": "Artikel für Nutzer aus vergangenen Interaktionen vorschlagen.",
+        "bullet1": "Benötigt Nutzer-, Artikel- und Bewertungsspalte",
+        "bullet2": "Explizites (Bewertungen) oder implizites Feedback",
+        "bullet3": "Top-K oder Score-für-Paar Vorhersagen"
+      },
+      "clustering": {
+        "title": "Clustering",
+        "blurb": "Ähnliche Zeilen ohne Labels gruppieren.",
+        "bullet1": "Keine Zielspalte erforderlich",
+        "bullet2": "Silhouette / Calinski-Harabasz / Davies-Bouldin",
+        "bullet3": "Weist neue Punkte einem gelernten Cluster zu"
+      }
+    }
   },
   "deployments": {
     "title": "Deployments",
     "subtitle": "Live-Endpoints für Ihre trainierten Modellversionen.",
     "newCta": "Neues Deployment →",
     "empty": "Noch keine Deployments. Stellen Sie eine Modellversion als Live-Endpoint bereit.",
+    "columns": {
+      "name": "Name",
+      "status": "Status",
+      "endpoint": "Endpoint",
+      "lastCalled": "Zuletzt aufgerufen"
+    },
     "tabs": {
       "overview": "Übersicht",
       "test": "Testen",
@@ -77,7 +130,12 @@
   "models": {
     "title": "Modelle",
     "subtitle": "Registrierte Modellversionen, bereit für das Deployment.",
-    "empty": "Noch keine Modelle registriert. Beenden Sie einen Run, um eine Version zu registrieren."
+    "empty": "Noch keine Modelle registriert. Beenden Sie einen Run, um eine Version zu registrieren.",
+    "columns": {
+      "name": "Name",
+      "description": "Beschreibung",
+      "registered": "Registriert"
+    }
   },
   "settings": {
     "title": "Einstellungen",

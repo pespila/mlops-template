@@ -1,5 +1,5 @@
-import { lazy } from "react";
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import { createBrowserRouter, Navigate, useRouteError } from "react-router-dom";
 
 import { AppShell } from "@/components/layout/AppShell";
 import { RequireAuth } from "@/components/layout/RequireAuth";
@@ -42,10 +42,58 @@ const Settings = lazy(() =>
   import("@/pages/settings/Settings").then((m) => ({ default: m.Settings })),
 );
 
+function PageSuspense({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-64 items-center justify-center text-sm text-fg3">Loading…</div>
+      }
+    >
+      {children}
+    </Suspense>
+  );
+}
+
+function NotFound() {
+  return (
+    <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
+      <p className="text-2xl font-bold text-fg1">404</p>
+      <p className="text-sm text-fg2">Page not found.</p>
+      <a href="/" className="text-sm text-primary hover:underline">
+        Go home
+      </a>
+    </div>
+  );
+}
+
+function RouteErrorBoundary() {
+  const error = useRouteError();
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "Something went wrong.";
+  return (
+    <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
+      <p className="text-lg font-bold text-danger">Error</p>
+      <p className="max-w-md text-sm text-fg2">{message}</p>
+      <a href="/" className="text-sm text-primary hover:underline">
+        Go home
+      </a>
+    </div>
+  );
+}
+
 export const router = createBrowserRouter([
   {
     path: "/login",
-    element: <Login />,
+    element: (
+      <PageSuspense>
+        <Login />
+      </PageSuspense>
+    ),
+    errorElement: <RouteErrorBoundary />,
   },
   {
     path: "/",
@@ -54,20 +102,102 @@ export const router = createBrowserRouter([
         <AppShell />
       </RequireAuth>
     ),
+    errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: <Dashboard /> },
-      { path: "datasets", element: <DatasetsList /> },
-      { path: "datasets/:id", element: <DatasetDetail /> },
-      { path: "experiments", element: <ExperimentsList /> },
-      { path: "experiments/new", element: <NewRunWizard /> },
-      { path: "experiments/runs/:id", element: <RunDetail /> },
-      { path: "experiments/:id", element: <ExperimentDetail /> },
-      { path: "models", element: <ModelsList /> },
-      { path: "models/:id", element: <ModelDetail /> },
-      { path: "deployments", element: <DeploymentsList /> },
-      { path: "deployments/:id", element: <DeploymentDetail /> },
-      { path: "settings", element: <Settings /> },
-      { path: "*", element: <Navigate to="/" replace /> },
+      {
+        path: "datasets",
+        element: (
+          <PageSuspense>
+            <DatasetsList />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "datasets/:id",
+        element: (
+          <PageSuspense>
+            <DatasetDetail />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "experiments",
+        element: (
+          <PageSuspense>
+            <ExperimentsList />
+          </PageSuspense>
+        ),
+      },
+      // "experiments/new" must come before "experiments/:id" — react-router
+      // matches routes in definition order; putting /new after /:id would
+      // treat the literal string "new" as an experiment ID.
+      {
+        path: "experiments/new",
+        element: (
+          <PageSuspense>
+            <NewRunWizard />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "experiments/runs/:id",
+        element: (
+          <PageSuspense>
+            <RunDetail />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "experiments/:id",
+        element: (
+          <PageSuspense>
+            <ExperimentDetail />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "models",
+        element: (
+          <PageSuspense>
+            <ModelsList />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "models/:id",
+        element: (
+          <PageSuspense>
+            <ModelDetail />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "deployments",
+        element: (
+          <PageSuspense>
+            <DeploymentsList />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "deployments/:id",
+        element: (
+          <PageSuspense>
+            <DeploymentDetail />
+          </PageSuspense>
+        ),
+      },
+      {
+        path: "settings",
+        element: (
+          <PageSuspense>
+            <Settings />
+          </PageSuspense>
+        ),
+      },
+      { path: "404", element: <NotFound /> },
+      { path: "*", element: <Navigate to="/404" replace /> },
     ],
   },
 ]);

@@ -18,7 +18,8 @@
     "close": "Close",
     "copy": "Copy",
     "copied": "Copied",
-    "empty": "Nothing here yet"
+    "empty": "Nothing here yet",
+    "actions": "Actions"
   },
   "dashboard": {
     "headline": "Train, deploy, and query ML models - all on your own machine.",
@@ -45,7 +46,11 @@
       "status": "Status",
       "created": "Created"
     },
-    "empty": "No datasets yet. Upload your first CSV or Parquet file to begin."
+    "empty": "No datasets yet. Upload your first CSV or Parquet file to begin.",
+    "delete": "Delete",
+    "deleteConfirm": "Permanently delete this dataset?",
+    "rename": "Rename",
+    "columnTypeChanged": "Column type updated. Re-profiling…"
   },
   "experiments": {
     "title": "Experiments",
@@ -56,17 +61,65 @@
   "wizard": {
     "step1": "Dataset",
     "step2": "Profile",
-    "step3": "Features",
-    "step4": "Target and split",
-    "step5": "Model",
-    "step6": "Hyperparameters",
-    "finish": "Start training →"
+    "step3": "Problem type",
+    "step4": "Features",
+    "step5": "Roles and split",
+    "step6": "Model",
+    "step7": "Hyperparameters",
+    "finish": "Start training →",
+    "clear": "Clear",
+    "clearConfirm": "Clear the whole wizard and start over?",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "notSuitedForTask": "Not ideal for the selected task",
+    "encoder": "Encoder",
+    "encoderOneHot": "One-hot",
+    "encoderLabel": "Label",
+    "encoderOrdinal": "Ordinal",
+    "problemTypeHeading": "Problem type",
+    "problemTypeSubtitle": "Pick the kind of problem you're solving. This determines which columns you'll need to assign next, and which models are available.",
+    "families": {
+      "supervised": {
+        "title": "Supervised",
+        "blurb": "Predict a target column from feature columns.",
+        "bullet1": "Regression or classification",
+        "bullet2": "Needs a target column",
+        "bullet3": "Train / validation / test split"
+      },
+      "forecasting": {
+        "title": "Forecasting",
+        "blurb": "Predict future values of a time series.",
+        "bullet1": "Needs a time column + value column",
+        "bullet2": "Temporal train / test split",
+        "bullet3": "Horizon configurable at training time"
+      },
+      "recommender": {
+        "title": "Recommender",
+        "blurb": "Suggest items for users from past interactions.",
+        "bullet1": "Needs user, item, rating columns",
+        "bullet2": "Explicit (ratings) or implicit feedback",
+        "bullet3": "Top-K or score-for-pair predictions"
+      },
+      "clustering": {
+        "title": "Clustering",
+        "blurb": "Group similar rows without labels.",
+        "bullet1": "No target column required",
+        "bullet2": "Silhouette / Calinski-Harabasz / Davies-Bouldin",
+        "bullet3": "Assigns new points to a learned cluster"
+      }
+    }
   },
   "deployments": {
     "title": "Deployments",
     "subtitle": "Live endpoints for your trained model versions.",
     "newCta": "New deployment →",
     "empty": "No deployments yet. Promote a model version to a live endpoint.",
+    "columns": {
+      "name": "Name",
+      "status": "Status",
+      "endpoint": "Endpoint",
+      "lastCalled": "Last called"
+    },
     "tabs": {
       "overview": "Overview",
       "test": "Test",
@@ -77,7 +130,12 @@
   "models": {
     "title": "Models",
     "subtitle": "Registered model versions ready for deployment.",
-    "empty": "No models registered yet. Finish a run to register a version."
+    "empty": "No models registered yet. Finish a run to register a version.",
+    "columns": {
+      "name": "Name",
+      "description": "Description",
+      "registered": "Registered"
+    }
   },
   "settings": {
     "title": "Settings",
