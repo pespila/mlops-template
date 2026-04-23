@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload } from "lucide-react";
+import { Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -8,7 +8,7 @@ import { FileDropzone } from "@/components/molecules/FileDropzone";
 import { GlassCard } from "@/components/molecules/GlassCard";
 import { Modal } from "@/components/molecules/Modal";
 import { useT } from "@/i18n";
-import { api, type DatasetRead } from "@/lib/api/client";
+import { api, errorMessage, type DatasetRead } from "@/lib/api/client";
 import { formatBytes, formatRelative } from "@/lib/format";
 
 function StatusPill({ status }: { status: DatasetRead["status"] }) {
@@ -46,6 +46,15 @@ export function DatasetsList() {
       setUploadOpen(false);
       setUploadPct(0);
       navigate(`/datasets/${dataset.id}`);
+    },
+  });
+
+  const [toDelete, setToDelete] = useState<DatasetRead | null>(null);
+  const deleteMut = useMutation({
+    mutationFn: (ds: DatasetRead) => api.datasets.remove(ds.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+      setToDelete(null);
     },
   });
 
@@ -92,6 +101,9 @@ export function DatasetsList() {
                 <th className="px-6 py-3 text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
                   {t("datasets.columns.created")}
                 </th>
+                <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
+                  {t("common.actions")}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[color:var(--border)]">
@@ -113,6 +125,20 @@ export function DatasetsList() {
                   </td>
                   <td className="px-6 py-3 text-xs text-fg2">{formatBytes(ds.size_bytes)}</td>
                   <td className="px-6 py-3 text-xs text-fg2">{formatRelative(ds.created_at)}</td>
+                  <td className="px-6 py-3 text-right">
+                    <button
+                      type="button"
+                      aria-label={t("datasets.delete")}
+                      title={t("datasets.delete")}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setToDelete(ds);
+                      }}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg2 hover:bg-bg-muted hover:text-danger"
+                    >
+                      <Trash2 size={14} strokeWidth={2} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -149,6 +175,38 @@ export function DatasetsList() {
         {upload.isError ? (
           <p className="mt-3 text-xs font-semibold text-danger">{t("common.error")}</p>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={Boolean(toDelete)}
+        onClose={() => (deleteMut.isPending ? undefined : setToDelete(null))}
+        title={t("datasets.delete")}
+      >
+        <p className="text-sm text-fg1">
+          {t("datasets.deleteConfirm")}{" "}
+          <span className="font-semibold">{toDelete?.name ?? ""}</span>
+        </p>
+        {deleteMut.isError ? (
+          <p className="mt-3 text-xs font-semibold text-danger">
+            {errorMessage(deleteMut.error, t("common.error"))}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button
+            variant="ghost"
+            onClick={() => setToDelete(null)}
+            disabled={deleteMut.isPending}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => (toDelete ? deleteMut.mutate(toDelete) : undefined)}
+            disabled={deleteMut.isPending}
+          >
+            {t("datasets.delete")}
+          </Button>
+        </div>
       </Modal>
     </div>
   );

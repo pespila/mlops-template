@@ -37,6 +37,9 @@ const TASK_LABELS: Record<TaskKind, string> = {
   regression: "Regression",
   binary_classification: "Binary classification",
   multiclass_classification: "Multiclass classification",
+  forecasting: "Forecasting",
+  recommender: "Recommender",
+  clustering: "Clustering",
 };
 
 function displayName(entry: ModelCatalogEntry): string {
@@ -116,6 +119,8 @@ export function StepModel() {
   const setModelCatalogId = useWizardStore((s) => s.setModelCatalogId);
   const task = useWizardStore((s) => s.task);
   const setTask = useWizardStore((s) => s.setTask);
+  const taskFamily = useWizardStore((s) => s.taskFamily);
+  const feedbackType = useWizardStore((s) => s.feedbackType);
   const hpoEnabled = useWizardStore((s) => s.hpoEnabled);
   const setHpoEnabled = useWizardStore((s) => s.setHpoEnabled);
   const next = useWizardStore((s) => s.next);
@@ -132,15 +137,33 @@ export function StepModel() {
     enabled: Boolean(datasetId),
   });
 
+  // For non-supervised families the task kind is determined by the Step 3
+  // pick; no inference from target is needed (and often impossible — e.g.
+  // clustering has no target at all).
+  const familyTask: TaskKind | null =
+    taskFamily === "forecasting"
+      ? "forecasting"
+      : taskFamily === "recommender"
+        ? "recommender"
+        : taskFamily === "clustering"
+          ? "clustering"
+          : null;
+
   // Pre-select the inferred task from the target column so the Recommended
-  // badges show even before the user touches the pill.
+  // badges show even before the user touches the pill. Supervised only —
+  // family-driven tasks are pinned below.
   useEffect(() => {
+    if (familyTask) {
+      if (task !== familyTask) setTask(familyTask);
+      return;
+    }
     if (task != null) return;
     const inferred = inferTaskFromTarget(schema.data, target);
     if (inferred) setTask(inferred);
-  }, [schema.data, target, task, setTask]);
+  }, [familyTask, schema.data, target, task, setTask]);
 
-  const effectiveTask = task ?? inferTaskFromTarget(schema.data, target);
+  const effectiveTask = familyTask ?? task ?? inferTaskFromTarget(schema.data, target);
+  const isSupervisedFamily = taskFamily == null || taskFamily === "supervised";
 
   const frameworks = useMemo(() => {
     const set = new Set<string>();
@@ -153,6 +176,14 @@ export function StepModel() {
   const visibleModels = useMemo(() => {
     const all = catalog.data ?? [];
     let filtered = all;
+    // Hard filter by task family: a forecasting run must never surface a
+    // classifier (and vice versa). Supervised families keep the legacy
+    // behaviour (show everything + let user switch between 3-way tasks).
+    if (familyTask) {
+      filtered = filtered.filter((m) =>
+        (m.supported_tasks ?? []).includes(familyTask),
+      );
+    }
     if (frameworkFilter !== "all") {
       filtered = filtered.filter((m) => m.framework === frameworkFilter);
     }
@@ -165,7 +196,7 @@ export function StepModel() {
       if (ar !== br) return ar ? -1 : 1;
       return displayName(a).localeCompare(displayName(b));
     });
-  }, [catalog.data, effectiveTask, frameworkFilter]);
+  }, [catalog.data, effectiveTask, familyTask, frameworkFilter]);
 
   const selectedEntry = (catalog.data ?? []).find((m) => m.id === modelCatalogId) ?? null;
   const selectedSupportsTask = Boolean(
@@ -176,10 +207,12 @@ export function StepModel() {
   const selectedIsAutogluon = (selectedEntry?.framework ?? "").toLowerCase() === "autogluon";
 
   // AutoGluon runs its own internal HPO via presets — hide the toggle and
-  // surface a hint instead.
+  // surface a hint instead. Non-supervised families (clustering / forecasting
+  // / recommender) don't yet support platform HPO — force it off there too.
+  const hpoUnavailable = selectedIsAutogluon || !isSupervisedFamily;
   useEffect(() => {
-    if (selectedIsAutogluon && hpoEnabled) setHpoEnabled(false);
-  }, [selectedIsAutogluon, hpoEnabled, setHpoEnabled]);
+    if (hpoUnavailable && hpoEnabled) setHpoEnabled(false);
+  }, [hpoUnavailable, hpoEnabled, setHpoEnabled]);
 
   const canContinue = Boolean(
     modelCatalogId && effectiveTask && selectedSupportsTask,
@@ -219,27 +252,38 @@ export function StepModel() {
               <span className="text-xs font-semibold uppercase tracking-[0.08em] text-fg2">
                 Task
               </span>
-              <div role="tablist" className="inline-flex overflow-hidden rounded-pill border border-[color:var(--border-primary)] text-[11px]">
-                {(Object.keys(TASK_LABELS) as TaskKind[]).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => setTask(k)}
-                    className={cn(
-                      "px-3 py-1.5 font-semibold uppercase tracking-[0.08em] transition-colors",
-                      effectiveTask === k
-                        ? "bg-primary text-white"
-                        : "bg-bg text-fg2 hover:text-fg1",
-                    )}
-                  >
-                    {TASK_LABELS[k]}
-                  </button>
-                ))}
-              </div>
+              {isSupervisedFamily ? (
+                <div
+                  role="tablist"
+                  className="inline-flex overflow-hidden rounded-pill border border-[color:var(--border-primary)] text-[11px]"
+                >
+                  {(["regression", "binary_classification", "multiclass_classification"] as TaskKind[]).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setTask(k)}
+                      className={cn(
+                        "px-3 py-1.5 font-semibold uppercase tracking-[0.08em] transition-colors",
+                        effectiveTask === k
+                          ? "bg-primary text-white"
+                          : "bg-bg text-fg2 hover:text-fg1",
+                      )}
+                    >
+                      {TASK_LABELS[k]}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="inline-flex rounded-pill border border-primary bg-[color:var(--primary-soft)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-primary">
+                  {effectiveTask ? TASK_LABELS[effectiveTask] : "—"}
+                </div>
+              )}
               <span className="text-xs text-fg3">
-                {effectiveTask
-                  ? `Inferred from target "${target ?? "—"}" — override if needed.`
-                  : "Pick a target column in the previous step to get a recommendation."}
+                {!isSupervisedFamily
+                  ? `Chosen at Step 3 — ${feedbackType === "implicit" && taskFamily === "recommender" ? "implicit feedback." : "can be changed there."}`
+                  : effectiveTask
+                    ? `Inferred from target "${target ?? "—"}" — override if needed.`
+                    : "Pick a target column in the previous step to get a recommendation."}
               </span>
             </div>
 
@@ -301,10 +345,12 @@ export function StepModel() {
                 <div className="mt-1 text-xs text-fg2">
                   {selectedIsAutogluon
                     ? "AutoGluon runs its own internal HPO — choose a preset and time limit on the next step."
-                    : "When enabled, you'll set min/max ranges per hyperparameter and the trainer runs an Optuna search. Either/or with fixed hyperparameters."}
+                    : !isSupervisedFamily
+                      ? "HPO is not yet available for clustering / forecasting / recommender runs — the trainer uses your fixed hyperparameters."
+                      : "When enabled, you'll set min/max ranges per hyperparameter and the trainer runs an Optuna search. Either/or with fixed hyperparameters."}
                 </div>
               </div>
-              {!selectedIsAutogluon ? (
+              {!hpoUnavailable ? (
                 <label className="inline-flex cursor-pointer items-center gap-2">
                   <input
                     type="checkbox"

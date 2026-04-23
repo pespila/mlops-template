@@ -1,0 +1,37 @@
+{
+  "http": {
+    "middlewares": {
+      "model-lightgbm-run-019db708-2026-04-22-21-14-cb77d133-strip": {
+        "stripPrefix": {
+          "prefixes": [
+            "/models/lightgbm-run-019db708-2026-04-22-21-14-cb77d133"
+          ]
+        }
+      }
+    },
+    "routers": {
+      "model-lightgbm-run-019db708-2026-04-22-21-14-cb77d133": {
+        "entryPoints": [
+          "web"
+        ],
+        "middlewares": [
+          "model-lightgbm-run-019db708-2026-04-22-21-14-cb77d133-strip"
+        ],
+        "priority": 50,
+        "rule": "PathPrefix(`/models/lightgbm-run-019db708-2026-04-22-21-14-cb77d133`)",
+        "service": "model-lightgbm-run-019db708-2026-04-22-21-14-cb77d133"
+      }
+    },
+    "services": {
+      "model-lightgbm-run-019db708-2026-04-22-21-14-cb77d133": {
+        "loadBalancer": {
+          "servers": [
+            {
+              "url": "http://model-lightgbm-run-019db708-2026-04-22-21-14-cb77d133:8000"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
