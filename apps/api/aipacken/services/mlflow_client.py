@@ -320,14 +320,21 @@ def _walk_artifacts(
         )
 
 
-def read_run_json(platform_run_id: str, artifact_path: str) -> dict[str, Any] | list[Any] | None:
+async def read_run_json(
+    platform_run_id: str, artifact_path: str
+) -> dict[str, Any] | list[Any] | None:
     """Download + json.load a specific artifact from a platform run.
 
     Returns None when MLflow is disabled, the run isn't found, the
     artifact doesn't exist, or the file isn't valid JSON. Used by the
     routers that serve SHAP / bias / selected_hyperparams straight from
     the MLflow artifact store instead of the DB.
+
+    The download is offloaded to a thread via asyncio.to_thread so the
+    synchronous MLflow SDK (which retries on 500s with multi-second
+    backoff) does not block the uvicorn event loop.
     """
+    import asyncio
     import json
     import tempfile
 
@@ -340,10 +347,12 @@ def read_run_json(platform_run_id: str, artifact_path: str) -> dict[str, Any] | 
     try:
         import mlflow  # type: ignore[import-not-found]
 
-        local = mlflow.artifacts.download_artifacts(
+        dst = tempfile.mkdtemp(prefix="aipacken-read-")
+        local = await asyncio.to_thread(
+            mlflow.artifacts.download_artifacts,
             run_id=run.info.run_id,
             artifact_path=artifact_path,
-            dst_path=tempfile.mkdtemp(prefix="aipacken-read-"),
+            dst_path=dst,
         )
         with open(local) as fp:
             return json.load(fp)

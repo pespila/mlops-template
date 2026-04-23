@@ -200,7 +200,7 @@ async def get_run_explanations(
     from aipacken.services import mlflow_client
 
     await get_owned_run(db, run_id, user)
-    payload = mlflow_client.read_run_json(run_id, "reports/shap.json")
+    payload = await mlflow_client.read_run_json(run_id, "reports/shap.json")
     if payload is None:
         return []
     # Back-compat shape: caller used to get a list with {id, kind,
@@ -246,7 +246,7 @@ async def get_run_bias(
     from aipacken.services import mlflow_client
 
     await get_owned_run(db, run_id, user)
-    payload = mlflow_client.read_run_json(run_id, "reports/bias.json")
+    payload = await mlflow_client.read_run_json(run_id, "reports/bias.json")
     if payload is None:
         return []
     if not isinstance(payload, dict):
@@ -301,7 +301,7 @@ async def get_run_selected_hyperparams(
 
     run = await get_owned_run(db, run_id, user)
 
-    payload = mlflow_client.read_run_json(run_id, "artifacts/selected_hyperparams.json")
+    payload = await mlflow_client.read_run_json(run_id, "artifacts/selected_hyperparams.json")
     if payload is not None:
         return payload
     return {

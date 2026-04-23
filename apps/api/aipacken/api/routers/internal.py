@@ -106,11 +106,11 @@ async def mlflow_run_diag(
     except Exception as exc:
         body["artifacts_error"] = str(exc)
     try:
-        body["bias_json"] = svc.read_run_json(platform_run_id, "reports/bias.json")
+        body["bias_json"] = await svc.read_run_json(platform_run_id, "reports/bias.json")
     except Exception as exc:
         body["bias_json_error"] = str(exc)
     try:
-        body["selected_hyperparams_json"] = svc.read_run_json(
+        body["selected_hyperparams_json"] = await svc.read_run_json(
             platform_run_id, "artifacts/selected_hyperparams.json"
         )
     except Exception as exc:

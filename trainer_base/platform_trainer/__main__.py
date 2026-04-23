@@ -681,7 +681,7 @@ def main() -> int:
             raise ValueError(f"target column {target!r} not in dataset")
 
         if task_family_peek == "clustering":
-            return _run_clustering(
+            rc = _run_clustering(
                 df=df,
                 transform_cfg=transform_cfg,
                 model_catalog=model_catalog_peek,
@@ -692,8 +692,16 @@ def main() -> int:
                 run_id=run_id,
                 t_start=t_start,
             )
+            try:
+                mlflow_sink.log_artifact(artifacts_dir, artifact_path="artifacts")
+                mlflow_sink.log_artifact(reports_dir, artifact_path="reports")
+                mlflow_sink.log_artifact(metrics_path, artifact_path=None)
+            except Exception as exc:  # noqa: BLE001 — telemetry must not fail the run
+                logger.warning("mlflow.artifact_sync_failed", extra={"error": str(exc)})
+            mlflow_sink.end("FINISHED")
+            return rc
         if task_family_peek == "forecasting":
-            return _run_forecasting(
+            rc = _run_forecasting(
                 df=df,
                 transform_cfg=transform_cfg,
                 model_catalog=model_catalog_peek,
@@ -704,8 +712,16 @@ def main() -> int:
                 run_id=run_id,
                 t_start=t_start,
             )
+            try:
+                mlflow_sink.log_artifact(artifacts_dir, artifact_path="artifacts")
+                mlflow_sink.log_artifact(reports_dir, artifact_path="reports")
+                mlflow_sink.log_artifact(metrics_path, artifact_path=None)
+            except Exception as exc:  # noqa: BLE001 — telemetry must not fail the run
+                logger.warning("mlflow.artifact_sync_failed", extra={"error": str(exc)})
+            mlflow_sink.end("FINISHED")
+            return rc
         if task_family_peek == "recommender":
-            return _run_recommender(
+            rc = _run_recommender(
                 df=df,
                 transform_cfg=transform_cfg,
                 model_catalog=model_catalog_peek,
@@ -716,6 +732,14 @@ def main() -> int:
                 run_id=run_id,
                 t_start=t_start,
             )
+            try:
+                mlflow_sink.log_artifact(artifacts_dir, artifact_path="artifacts")
+                mlflow_sink.log_artifact(reports_dir, artifact_path="reports")
+                mlflow_sink.log_artifact(metrics_path, artifact_path=None)
+            except Exception as exc:  # noqa: BLE001 — telemetry must not fail the run
+                logger.warning("mlflow.artifact_sync_failed", extra={"error": str(exc)})
+            mlflow_sink.end("FINISHED")
+            return rc
 
         # The API may have persisted a user-chosen task override inside
         # MODEL_CATALOG (see apps/api/.../runs router). If absent or invalid,
